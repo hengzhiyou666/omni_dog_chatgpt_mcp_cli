@@ -1,13 +1,14 @@
-"""Read-only adapter for omni-inspection's authenticated HTTP API.
+"""Adapter for omni-inspection's authenticated HTTP API.
 
 Cloud database identifiers and robot-local asset names are different namespaces.
-This module preserves both and never sends a command to the robot.
+This module preserves both. Writes require the explicit execution policy.
 """
 
 from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
@@ -15,6 +16,8 @@ import httpx
 
 from omni_tools.config import Settings
 from omni_tools.errors import OmniError
+from omni_tools.policy import require_write
+from omni_tools.util import identifier
 
 
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -103,7 +106,7 @@ def _identifier(value: Any) -> str:
 
 
 class HTTPBackend:
-    """Synchronous GET-only backend; an injected client remains caller-owned."""
+    """Synchronous backend; an injected client remains caller-owned."""
 
     def __init__(self, settings: Settings, client: httpx.Client | None = None):
         self.settings = settings
@@ -122,10 +125,19 @@ class HTTPBackend:
         self.close()
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self._request("GET", path, params=params)
+
+    def _request(
+        self, method: str, path: str, *, params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        # No retry middleware: a timed-out write may already have taken effect.
         try:
-            response = self._client.get(
+            response = self._client.request(
+                method,
                 self.api_base + path,
                 params=params,
+                json=body,
                 headers={"Authorization": "Bearer " + self.settings.token, "Accept": "application/json"},
                 timeout=self.settings.timeout,
                 follow_redirects=False,
@@ -241,3 +253,194 @@ class HTTPBackend:
             if "robot_id" in item:
                 self._check_robot(item, robot_id)
         return {"task": task, "events": events, "evidence": evidence}
+
+    @staticmethod
+    def _returned_id(value: Any) -> str:
+        try:
+            return identifier(_identifier(value))
+        except OmniError:
+            raise _invalid_response() from None
+
+    def _write_error(
+        self, error: OmniError, phase: str, robot_id: str, *,
+        task_id: str | None = None, plan_id: str | None = None,
+        goal_id: str | None = None, navigation: bool = False,
+    ) -> OmniError:
+        """Preserve partial operation identity without replaying a mutation."""
+        if goal_id:
+            recovery = {"method": "GET", "path": f"/api/v1/robots/{_segment(robot_id)}/navigation/goals/{_segment(goal_id)}"}
+        elif plan_id:
+            recovery = {"method": "GET", "path": f"/api/v1/robots/{_segment(robot_id)}/navigation/plans/{_segment(plan_id)}"}
+            if phase == "submit_navigation_goal":
+                recovery["note"] = (
+                    "A plan lookup does not confirm execution. Inspect robot state or the operator console; "
+                    "do not automatically submit the plan again."
+                )
+                recovery["also"] = {"method": "GET", "path": f"/api/v1/robots/{_segment(robot_id)}/status"}
+        elif task_id:
+            recovery = {"method": "GET", "path": f"/api/v1/patrol/tasks/{_segment(task_id)}"}
+        elif navigation:
+            recovery = {
+                "method": "GET", "path": f"/api/v1/robots/{_segment(robot_id)}/status",
+                "note": "No plan identifier was confirmed. Inspect state; do not automatically recreate or execute a plan.",
+            }
+        else:
+            recovery = {"method": "GET", "path": "/api/v1/patrol/tasks", "params": {"robot_id": robot_id}}
+        details = {
+            **error.details, "phase": phase, "robot_id": robot_id,
+            "outcome_unknown": True, "recover_by_get": recovery,
+            "retry_writes": False,
+        }
+        for name, value in (("task_id", task_id), ("plan_id", plan_id), ("goal_id", goal_id)):
+            if value is not None:
+                details[name] = value
+
+        def redact(value: Any) -> Any:
+            if isinstance(value, str) and self.settings.token:
+                return value.replace(self.settings.token, "[redacted]")
+            if isinstance(value, dict):
+                return {key: redact(item) for key, item in value.items()}
+            return value
+
+        return OmniError(error.code, error.message, redact(details))
+
+    def start_inspection(self, route_id: str, robot_id: str) -> dict[str, Any]:
+        require_write(self.settings, robot_id)
+        route_id = identifier(route_id, "route_id")
+        robot_id = identifier(robot_id, "robot_id")
+        task_id = None
+        phase = "create_inspection_task"
+        try:
+            task = _object(self._request("POST", "/patrol/tasks", body={
+                "route_id": route_id, "robot_id": robot_id, "task_type": "manual", "priority": 0,
+            }))
+            self._check_robot(task, robot_id)
+            task_id = self._returned_id(task.get("task_id"))
+            if task.get("route_id") != route_id or task.get("status") != "pending":
+                raise _invalid_response()
+            phase = "start_inspection_task"
+            started = _object(self._request("POST", f"/patrol/tasks/{_segment(task_id)}/start"))
+            self._check_robot(started, robot_id)
+            if (started.get("task_id") != task_id or started.get("route_id") != route_id
+                    or not isinstance(started.get("status"), str) or not started["status"]):
+                raise _invalid_response()
+            return started
+        except OmniError as error:
+            raise self._write_error(error, phase, robot_id, task_id=task_id) from None
+
+    @staticmethod
+    def _coordinate(value: Any) -> float:
+        try:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError
+            return number
+        except (ValueError, TypeError, OverflowError):
+            raise OmniError("invalid_argument", "Navigation coordinates and yaw must be finite numbers.") from None
+
+    @staticmethod
+    def _check_plan(
+        plan: dict[str, Any], map_id: str, map_version: int, pose: dict[str, Any],
+    ) -> None:
+        if plan.get("map_id") != map_id or type(plan.get("map_version")) is not int or plan["map_version"] != map_version:
+            raise OmniError("map_mismatch", "Backend navigation plan does not match the requested map.")
+        if plan.get("status") != "ready" or plan.get("executable") is not True:
+            raise OmniError("plan_not_executable", "Backend navigation plan is not executable.")
+        try:
+            expires_at = datetime.fromisoformat(plan["expires_at"].replace("Z", "+00:00"))
+            if expires_at.tzinfo is None:
+                raise ValueError
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise _invalid_response() from None
+        if expires_at <= datetime.now(timezone.utc):
+            raise OmniError("plan_expired", "Backend navigation plan has expired.")
+        actual = _object(plan.get("goal_pose"))
+        for group, fields in pose.items():
+            values = _object(actual.get(group))
+            for key, expected in fields.items():
+                value = values.get(key)
+                try:
+                    matches = (type(value) in (int, float) and math.isfinite(value)
+                               and math.isclose(value, expected, rel_tol=1e-9, abs_tol=1e-9))
+                except OverflowError:
+                    matches = False
+                if not matches:
+                    raise OmniError("goal_mismatch", "Backend navigation plan does not match the requested destination.")
+
+    def navigate_to(
+        self, map_id: str, map_version: int, x: float, y: float, yaw: float, robot_id: str,
+    ) -> dict[str, Any]:
+        require_write(self.settings, robot_id)
+        robot_id = identifier(robot_id, "robot_id")
+        map_id = identifier(map_id, "map_id")
+        if type(map_version) is not int or not 1 <= map_version <= 4294967295:
+            raise OmniError("invalid_argument", "map_version must be an integer between 1 and 4294967295.")
+        x, y, yaw = self._coordinate(x), self._coordinate(y), self._coordinate(yaw)
+        pose = {
+            "position": {"x": x, "y": y, "z": 0.0},
+            "orientation": {"x": 0.0, "y": 0.0, "z": math.sin(yaw / 2), "w": math.cos(yaw / 2)},
+        }
+        base = f"/robots/{_segment(robot_id)}/navigation"
+        phase = "create_navigation_plan"
+        plan_id = goal_id = None
+        try:
+            plan = _object(self._request("POST", base + "/plans", body={
+                "map_id": map_id, "map_version": map_version, "goal_pose": pose,
+            }))
+            self._check_robot(plan, robot_id)
+            plan_id = self._returned_id(plan.get("plan_id"))
+            self._check_plan(plan, map_id, map_version, pose)
+            phase = "submit_navigation_goal"
+            goal = _object(self._request("POST", base + "/goals", body={"plan_id": plan_id}))
+            self._check_robot(goal, robot_id)
+            goal_id = self._returned_id(goal.get("goal_id"))
+            if (goal.get("plan_id") != plan_id or goal.get("map_id") != map_id
+                    or type(goal.get("map_version")) is not int or goal["map_version"] != map_version
+                    or not isinstance(goal.get("status"), str) or not goal["status"]):
+                raise _invalid_response()
+            return goal
+        except OmniError as error:
+            raise self._write_error(
+                error, phase, robot_id, plan_id=plan_id, goal_id=goal_id, navigation=True,
+            ) from None
+
+    def get_navigation_task(self, task_id: str, robot_id: str) -> dict[str, Any]:
+        robot_id = identifier(robot_id, "robot_id")
+        task_id = identifier(task_id, "task_id")
+        goal = _object(self._get(f"/robots/{_segment(robot_id)}/navigation/goals/{_segment(task_id)}"))
+        self._check_robot(goal, robot_id)
+        if self._returned_id(goal.get("goal_id")) != task_id:
+            raise _invalid_response()
+        return goal
+
+    def cancel_task(self, task_id: str, robot_id: str, kind: str = "inspection") -> dict[str, Any]:
+        require_write(self.settings, robot_id)
+        robot_id = identifier(robot_id, "robot_id")
+        task_id = identifier(task_id, "task_id")
+        if kind not in {"inspection", "navigation"}:
+            raise OmniError("invalid_argument", "kind must be inspection or navigation.")
+        if kind == "inspection":
+            task = self.get_task(task_id, robot_id)
+            if task.get("status") in {"completed", "failed", "cancelled"}:
+                return {**task, "cancel_requested": False, "already_terminal": True}
+            try:
+                self._request("POST", f"/patrol/tasks/{_segment(task_id)}/cancel")
+                current = self.get_task(task_id, robot_id)
+                return {**current, "cancel_requested": True}
+            except OmniError as error:
+                raise self._write_error(error, "cancel_inspection_task", robot_id, task_id=task_id) from None
+        goal = self.get_navigation_task(task_id, robot_id)
+        if goal.get("status") in {"succeeded", "failed", "cancelled"}:
+            return {**goal, "cancel_requested": False, "already_terminal": True}
+        try:
+            current = _object(self._request(
+                "DELETE", f"/robots/{_segment(robot_id)}/navigation/goals/{_segment(task_id)}",
+            ))
+            self._check_robot(current, robot_id)
+            if current.get("goal_id") != task_id or current.get("plan_id") != goal.get("plan_id"):
+                raise _invalid_response()
+            return {**current, "cancel_requested": True}
+        except OmniError as error:
+            raise self._write_error(error, "cancel_navigation_task", robot_id, goal_id=task_id, navigation=True) from None

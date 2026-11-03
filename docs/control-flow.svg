@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1930" viewBox="0 0 1800 1930" role="img" aria-labelledby="title description">
+<title id="title">Omni Tools 调用流程</title><desc id="description">左侧为只读查询流程。右侧操作默认只返回预览；只有 execute=true、写入开关开启、机器人在允许列表时才通过 HTTP 提交。后端受理不等于完成，get_task 读取真实任务状态。</desc>
+<defs>
+<marker id="arrow-entry" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#2563EB"/></marker>
+<marker id="arrow-policy" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7C3AED"/></marker>
+<marker id="arrow-read" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0F766E"/></marker>
+<marker id="arrow-write" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#C2410C"/></marker>
+<marker id="arrow-runtime" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
+</defs>
+<rect width="1800" height="1930" fill="#FFFFFF"/>
+<g font-family="Noto Sans CJK SC, Noto Sans CJK, sans-serif">
+<text x="90" y="88" font-size="50" font-weight="750" fill="#0F172A" text-anchor="start">Omni Tools · 调用流程</text>
+<text x="92" y="137" font-size="25" font-weight="400" fill="#475569" text-anchor="start">查询直接读取；操作先预览，再由显式授权决定是否提交</text>
+<rect x="80" y="215" width="580" height="1520" rx="20" fill="#FAFBFD" stroke="#E2E8F0" stroke-width="2"/>
+<rect x="700" y="215" width="1020" height="1520" rx="20" fill="#FAFBFD" stroke="#E2E8F0" stroke-width="2"/>
+<text x="110" y="268" font-size="34" font-weight="700" fill="#0F766E" text-anchor="start">只读查询</text>
+<text x="740" y="268" font-size="34" font-weight="700" fill="#7C3AED" text-anchor="start">操作请求（V2）</text>
+<rect x="120" y="315" width="500" height="125" rx="20" fill="#EFF6FF" stroke="#2563EB" stroke-width="2"/>
+<text x="370.0" y="352" font-size="28" font-weight="700" fill="#2563EB" text-anchor="middle">1 选择查询</text>
+<text x="370.0" y="386" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">机器人状态 / 地图 / 路线</text>
+<text x="370.0" y="420" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">任务状态 / 巡检结果</text>
+<path d="M 370 440 V 490" fill="none" stroke="#2563EB" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-entry)"/>
+<rect x="120" y="490" width="500" height="95" rx="20" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2"/>
+<text x="370.0" y="526" font-size="28" font-weight="700" fill="#7C3AED" text-anchor="middle">2 参数校验与统一封装</text>
+<text x="370.0" y="558" font-size="23" font-weight="400" fill="#0F172A" text-anchor="middle">OmniService</text>
+<path d="M 370 585 V 620 H 230 V 665" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<path d="M 370 620 H 510 V 665" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<circle cx="370" cy="620" r="5" fill="#0F766E"/>
+<rect x="100" y="665" width="260" height="135" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="230.0" y="704" font-size="25" font-weight="700" fill="#0F766E" text-anchor="middle">SSH 后端</text>
+<text x="230.0" y="737" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">状态订阅</text>
+<text x="230.0" y="770" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">ROS 查询服务</text>
+<rect x="380" y="665" width="260" height="135" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="510.0" y="704" font-size="25" font-weight="700" fill="#0F766E" text-anchor="middle">HTTP 后端</text>
+<text x="510.0" y="737" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">巡检后端</text>
+<text x="510.0" y="770" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">查询 API</text>
+<path d="M 230 800 V 842 H 370 V 890" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<path d="M 510 800 V 842 H 370" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7"/>
+<circle cx="370" cy="842" r="5" fill="#0F766E"/>
+<rect x="120" y="890" width="500" height="160" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="370.0" y="935" font-size="28" font-weight="700" fill="#0F766E" text-anchor="middle">3 返回结构化结果</text>
+<text x="370.0" y="974" font-size="23" font-weight="400" fill="#0F172A" text-anchor="middle">JSON / 已知值 / 新鲜度</text>
+<text x="370.0" y="1013" font-size="23" font-weight="400" fill="#0F172A" text-anchor="middle">缺失、超时与未知明确区分</text>
+<rect x="120" y="1150" width="500" height="255" rx="20" fill="#F1F5F9" stroke="#475569" stroke-width="2"/>
+<text x="370.0" y="1195" font-size="27" font-weight="700" fill="#475569" text-anchor="middle">任务状态怎么读？</text>
+<text x="370.0" y="1238" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">get_task(task_id, kind)</text>
+<text x="370.0" y="1281" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">匹配任务标识后，才归属该任务</text>
+<text x="370.0" y="1324" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">未观测到任务 ≠ 任务已经完成</text>
+<text x="370.0" y="1367" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">检查点证据由巡检结果查询读取</text>
+<rect x="120" y="1520" width="500" height="120" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="370.0" y="1564" font-size="28" font-weight="700" fill="#0F766E" text-anchor="middle">本流程只读</text>
+<text x="370.0" y="1601" font-size="23" font-weight="400" fill="#0F172A" text-anchor="middle">不提交运动或任务控制请求</text>
+<rect x="820" y="315" width="780" height="125" rx="20" fill="#EFF6FF" stroke="#2563EB" stroke-width="2"/>
+<text x="1210.0" y="359" font-size="27" font-weight="700" fill="#2563EB" text-anchor="middle">start_inspection / navigate_to / cancel_task</text>
+<text x="1210.0" y="397" font-size="24" font-weight="400" fill="#0F172A" text-anchor="middle">请求包含 robot_id、动作参数与 execute 标志</text>
+<path d="M 1210 440 V 468 H 920 V 510" fill="none" stroke="#7C3AED" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-policy)"/>
+<path d="M 1210 468 H 1410 V 510" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<circle cx="1210" cy="468" r="5" fill="#7C3AED"/>
+<rect x="740" y="510" width="360" height="130" rx="20" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2"/>
+<text x="920.0" y="555" font-size="26" font-weight="700" fill="#7C3AED" text-anchor="middle">默认：execute=false</text>
+<text x="920.0" y="595" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">生成预览，不调用后端</text>
+<rect x="1170" y="510" width="480" height="130" rx="20" fill="#FFF7ED" stroke="#C2410C" stroke-width="2"/>
+<text x="1410.0" y="555" font-size="28" font-weight="700" fill="#C2410C" text-anchor="middle">执行：execute=true</text>
+<text x="1410.0" y="595" font-size="23" font-weight="400" fill="#0F172A" text-anchor="middle">进入授权检查</text>
+<path d="M 920 640 V 715" fill="none" stroke="#7C3AED" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-policy)"/>
+<rect x="740" y="715" width="360" height="205" rx="20" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2"/>
+<text x="920.0" y="760" font-size="28" font-weight="700" fill="#7C3AED" text-anchor="middle">返回操作预览</text>
+<text x="920.0" y="800" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">机器人 / 动作 / 参数</text>
+<text x="920.0" y="840" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">没有 HTTP 请求</text>
+<text x="920.0" y="880" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">没有机器人控制调用</text>
+<path d="M 1410 640 V 715" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<rect x="1170" y="715" width="480" height="270" rx="20" fill="#FFF7ED" stroke="#C2410C" stroke-width="2"/>
+<text x="1410" y="760" font-size="28" font-weight="700" fill="#C2410C" text-anchor="middle">三项执行条件 · 全部满足</text>
+<text x="1200" y="807" font-size="23" font-weight="600" fill="#0F172A" text-anchor="start">① execute=true</text>
+<text x="1200" y="849" font-size="23" font-weight="600" fill="#0F172A" text-anchor="start">② OMNI_ALLOW_WRITES=1</text>
+<text x="1200" y="891" font-size="23" font-weight="600" fill="#0F172A" text-anchor="start">③ robot_id 位于执行允许列表</text>
+<path d="M 1200 914 H 1620" fill="none" stroke="#C2410C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1410" y="944" font-size="21" font-weight="600" fill="#C2410C" text-anchor="middle">仅 HTTP 后端可执行</text>
+<text x="1410" y="975" font-size="20" font-weight="600" fill="#C2410C" text-anchor="middle">不满足则本地拒绝，零后端调用</text>
+<path d="M 1410 985 V 1040" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<rect x="1170" y="1040" width="480" height="110" rx="20" fill="#FFF7ED" stroke="#C2410C" stroke-width="2"/>
+<text x="1410.0" y="1083" font-size="27" font-weight="700" fill="#C2410C" text-anchor="middle">HTTP 预检 / 按需提交</text>
+<text x="1410.0" y="1119" font-size="20" font-weight="400" fill="#0F172A" text-anchor="middle">取消已终态任务：不再发送取消指令</text>
+<path d="M 1410 1150 V 1210" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<rect x="1170" y="1210" width="480" height="110" rx="20" fill="#F1F5F9" stroke="#475569" stroke-width="2"/>
+<text x="1410.0" y="1253" font-size="27" font-weight="700" fill="#475569" text-anchor="middle">返回任务标识与处理结果</text>
+<text x="1410.0" y="1289" font-size="23" font-weight="400" fill="#0F172A" text-anchor="middle">受理成功 ≠ 执行完成</text>
+<path d="M 1410 1320 V 1380" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<text x="1432" y="1359" font-size="18" font-weight="500" fill="#0F766E" text-anchor="start">必要时继续查询</text>
+<rect x="1170" y="1380" width="480" height="110" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="1410.0" y="1423" font-size="28" font-weight="700" fill="#0F766E" text-anchor="middle">get_task(task_id, kind)</text>
+<text x="1410.0" y="1459" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">进行中：由调用方继续查询</text>
+<path d="M 1650 1462 H 1692 V 1407 H 1650" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<text x="1685" y="1375" font-size="17" font-weight="500" fill="#0F766E" text-anchor="middle">未终态</text>
+<path d="M 1410 1490 V 1560" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<rect x="1170" y="1560" width="480" height="115" rx="20" fill="#F1F5F9" stroke="#475569" stroke-width="2"/>
+<text x="1410.0" y="1604" font-size="27" font-weight="700" fill="#475569" text-anchor="middle">确认任务最终状态</text>
+<text x="1410.0" y="1641" font-size="19" font-weight="400" fill="#0F172A" text-anchor="middle">完成 / 失败 / 取消；不可观测则报告未知</text>
+<text x="740" y="1080" font-size="24" font-weight="700" fill="#7C3AED" text-anchor="start">预览在此结束</text>
+<text x="740" y="1120" font-size="22" font-weight="400" fill="#475569" text-anchor="start">查看方案不会触发执行。</text>
+<text x="740" y="1175" font-size="23" font-weight="700" fill="#475569" text-anchor="start">执行链使用既有平台：</text>
+<text x="740" y="1214" font-size="22" font-weight="400" fill="#475569" text-anchor="start">后端 → Edge / MQTT</text>
+<text x="740" y="1253" font-size="22" font-weight="400" fill="#475569" text-anchor="start">→ Mission Manager</text>
+<text x="740" y="1292" font-size="22" font-weight="400" fill="#475569" text-anchor="start">→ 机器人本地子系统</text>
+<text x="740" y="1460" font-size="23" font-weight="700" fill="#475569" text-anchor="start">实时控制保持在机器人本地</text>
+<text x="740" y="1502" font-size="21" font-weight="400" fill="#475569" text-anchor="start">工具调用负责请求与查询，</text>
+<text x="740" y="1537" font-size="21" font-weight="400" fill="#475569" text-anchor="start">不承担速度控制循环。</text>
+<rect x="100" y="1790" width="22" height="22" rx="5" fill="#EFF6FF" stroke="#2563EB" stroke-width="1.5"/>
+<text x="134" y="1810" font-size="21" font-weight="500" fill="#475569" text-anchor="start">入口 / 用户请求</text>
+<rect x="400" y="1790" width="22" height="22" rx="5" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="434" y="1810" font-size="21" font-weight="500" fill="#475569" text-anchor="start">共享逻辑 / 预览</text>
+<rect x="710" y="1790" width="22" height="22" rx="5" fill="#ECFDF5" stroke="#0F766E" stroke-width="1.5"/>
+<text x="744" y="1810" font-size="21" font-weight="500" fill="#475569" text-anchor="start">只读查询</text>
+<rect x="950" y="1790" width="22" height="22" rx="5" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.5"/>
+<text x="984" y="1810" font-size="21" font-weight="500" fill="#475569" text-anchor="start">受控操作</text>
+<rect x="1190" y="1790" width="22" height="22" rx="5" fill="#F1F5F9" stroke="#475569" stroke-width="1.5"/>
+<text x="1224" y="1810" font-size="21" font-weight="500" fill="#475569" text-anchor="start">既有平台 / 本地运行时</text>
+<text x="100" y="1865" font-size="23" font-weight="500" fill="#475569" text-anchor="start">三项执行条件缺一不可。预览不调用后端；后端受理不能代替任务完成证据。</text>
+</g>
+</svg>

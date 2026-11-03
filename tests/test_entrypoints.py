@@ -60,8 +60,11 @@ def test_invalid_config_rejected(kwargs):
 async def test_mcp_tools_have_read_only_annotations_and_structured_errors(service):
     server = create_server(service=service)
     tools = await server.list_tools()
-    assert {t.name for t in tools} == {"get_robot_status", "list_maps", "list_routes", "get_task", "get_inspection_result"}
-    assert all(t.annotations.readOnlyHint and not t.annotations.destructiveHint for t in tools)
+    reads = {"get_robot_status", "list_maps", "list_routes", "get_task", "get_inspection_result"}
+    writes = {"start_inspection", "navigate_to", "cancel_task"}
+    assert {t.name for t in tools} == reads | writes
+    assert all(t.annotations.readOnlyHint and not t.annotations.destructiveHint for t in tools if t.name in reads)
+    assert all(not t.annotations.readOnlyHint and t.annotations.destructiveHint for t in tools if t.name in writes)
     result = await server.call_tool("get_robot_status", {"robot_id": "dog4"})
     assert not result.isError
     assert result.structuredContent["data"]["battery_percentage"] is None

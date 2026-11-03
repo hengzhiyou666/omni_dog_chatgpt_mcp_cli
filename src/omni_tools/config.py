@@ -18,8 +18,16 @@ class Settings:
     ssh_connect_timeout: int = 10
     base_url: str = ""
     token: str = field(default="", repr=False)
+    allow_writes: bool = False
+    allowed_robots: tuple[str, ...] = ()
 
     def __post_init__(self):
+        if type(self.allow_writes) is not bool or not isinstance(self.allowed_robots, tuple):
+            raise OmniError("configuration_error", "Invalid write policy configuration")
+        for robot in self.allowed_robots:
+            identifier(robot, "allowed robot")
+            if "*" in robot:
+                raise OmniError("configuration_error", "Robot allowlist cannot contain wildcards")
         if self.backend not in {"ssh", "http"}:
             raise OmniError("configuration_error", "OMNI_BACKEND must be ssh or http")
         identifier(self.robot_id, "robot_id")
@@ -42,13 +50,18 @@ class Settings:
     @classmethod
     def from_env(cls, **overrides):
         try:
+            write_flag = os.getenv("OMNI_ALLOW_WRITES", "0")
+            if write_flag not in {"0", "1"}:
+                raise OmniError("configuration_error", "OMNI_ALLOW_WRITES must be exactly 0 or 1")
             values = dict(backend=os.getenv("OMNI_BACKEND", "ssh"),
                           robot_id=os.getenv("OMNI_ROBOT_ID", "dog4"),
                           ssh_host=os.getenv("OMNI_SSH_HOST", "dog4"),
                           timeout=float(os.getenv("OMNI_TIMEOUT", "12")),
                           ssh_connect_timeout=int(os.getenv("OMNI_SSH_CONNECT_TIMEOUT", "10")),
                           base_url=os.getenv("OMNI_BASE_URL", ""),
-                          token=os.getenv("OMNI_TOKEN", ""))
+                          token=os.getenv("OMNI_TOKEN", ""),
+                          allow_writes=write_flag == "1",
+                          allowed_robots=tuple(x.strip() for x in os.getenv("OMNI_ALLOWED_ROBOTS", "").split(",") if x.strip()))
             values.update({k: v for k, v in overrides.items() if v is not None})
             return cls(**values)
         except (ValueError, TypeError):

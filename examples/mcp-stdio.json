@@ -6,7 +6,9 @@
       "env": {
         "OMNI_BACKEND": "ssh",
         "OMNI_SSH_HOST": "dog4",
-        "OMNI_ROBOT_ID": "dog4"
+        "OMNI_ROBOT_ID": "dog4",
+        "OMNI_ALLOW_WRITES": "0",
+        "OMNI_ALLOWED_ROBOTS": ""
       }
     }
   }

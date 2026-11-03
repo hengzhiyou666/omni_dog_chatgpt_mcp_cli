@@ -1,4 +1,4 @@
-"""Exercise the actual stdio protocol without contacting a robot or the internet."""
+"""Exercise both MCP transports without contacting a robot or the internet."""
 
 import json
 import os
@@ -19,9 +19,16 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
 
-TOOLS = {
+READ_TOOLS = {
     "get_robot_status", "list_maps", "list_routes", "get_task", "get_inspection_result",
 }
+WRITE_TOOLS = {"start_inspection", "navigate_to", "cancel_task"}
+TOOLS = READ_TOOLS | WRITE_TOOLS
+PREVIEW_CALLS = [
+    ("start_inspection", {"route_id": "route-demo"}),
+    ("navigate_to", {"map_id": "map-demo", "map_version": 1, "x": 1, "y": 2}),
+    ("cancel_task", {"task_id": "task-demo"}),
+]
 ROBOT_STATUS = {
     "robot_id": "demo", "online": True, "battery_valid": False,
     "battery": {"percent": None},
@@ -133,11 +140,17 @@ async def test_sdk_stdio_initialization_discovery_and_status(stdio_parameters, m
 
                 discovered = await session.list_tools()
                 assert {tool.name for tool in discovered.tools} == TOOLS
-                assert len(discovered.tools) == 5
+                assert len(discovered.tools) == 8
                 for tool in discovered.tools:
                     assert tool.inputSchema["type"] == "object"
-                    assert tool.annotations.readOnlyHint is True
-                    assert tool.annotations.destructiveHint is False
+                    assert tool.annotations.readOnlyHint is (tool.name in READ_TOOLS)
+                    assert tool.annotations.destructiveHint is (tool.name in WRITE_TOOLS)
+
+                for tool, arguments in PREVIEW_CALLS:
+                    preview = await session.call_tool(tool, arguments)
+                    assert preview.isError is False
+                    assert preview.structuredContent["data"]["executed"] is False
+                    assert mock_http.requests == []
 
                 # An empty argument object exercises OMNI_ROBOT_ID resolution.
                 result = await session.call_tool("get_robot_status", {})
@@ -231,8 +244,13 @@ async def test_sdk_streamable_http_initialization_discovery_and_status(http_mcp_
                     assert initialized.serverInfo.name == "Omni Tools"
                     assert initialized.capabilities.tools is not None
                     discovered = await session.list_tools()
-                    assert len(discovered.tools) == 5
+                    assert len(discovered.tools) == 8
                     assert {tool.name for tool in discovered.tools} == TOOLS
+                    for tool, arguments in PREVIEW_CALLS:
+                        preview = await session.call_tool(tool, arguments)
+                        assert preview.isError is False
+                        assert preview.structuredContent["data"]["executed"] is False
+                        assert mock_http.requests == []
                     result = await session.call_tool("get_robot_status", {"robot_id": "demo"})
                     assert result.isError is False
                     assert result.structuredContent["ok"] is True

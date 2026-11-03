@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1760" viewBox="0 0 1800 1760" role="img" aria-labelledby="title description">
+<title id="title">Omni Tools 系统架构</title><desc id="description">CLI 与 MCP 共用 OmniService。只读查询可走 SSH 或 HTTP；V2 操作默认预览，仅经三项执行条件后走 HTTP。既有平台经 Edge 和 MQTT 与机器人任务编排及本地运行时连接。</desc>
+<defs>
+<marker id="arrow-entry" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#2563EB"/></marker>
+<marker id="arrow-policy" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7C3AED"/></marker>
+<marker id="arrow-read" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0F766E"/></marker>
+<marker id="arrow-write" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#C2410C"/></marker>
+<marker id="arrow-runtime" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
+</defs>
+<rect width="1800" height="1760" fill="#FFFFFF"/>
+<g font-family="Noto Sans CJK SC, Noto Sans CJK, sans-serif">
+<text x="90" y="88" font-size="50" font-weight="750" fill="#0F172A" text-anchor="start">Omni Tools · 系统架构</text>
+<text x="92" y="137" font-size="25" font-weight="400" fill="#475569" text-anchor="start">统一工具入口，复用现有机器人平台；查询与操作分别路由</text>
+<rect x="1350" y="48" width="360" height="62" rx="31" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2"/>
+<text x="1530" y="88" font-size="22" font-weight="600" fill="#7C3AED" text-anchor="middle">V1 查询 / V2 受控操作</text>
+<rect x="150" y="205" width="650" height="125" rx="20" fill="#EFF6FF" stroke="#2563EB" stroke-width="2"/>
+<text x="475.0" y="248" font-size="32" font-weight="700" fill="#2563EB" text-anchor="middle">CLI · 命令行</text>
+<text x="475.0" y="282" font-size="24" font-weight="400" fill="#0F172A" text-anchor="middle">omni 命令 · 面向终端与自动化脚本</text>
+<rect x="1000" y="205" width="650" height="125" rx="20" fill="#EFF6FF" stroke="#2563EB" stroke-width="2"/>
+<text x="1325.0" y="248" font-size="32" font-weight="700" fill="#2563EB" text-anchor="middle">MCP · 工具服务</text>
+<text x="1325.0" y="282" font-size="24" font-weight="400" fill="#0F172A" text-anchor="middle">面向 ChatGPT / 支持 MCP 的客户端</text>
+<path d="M 475 330 V 390" fill="none" stroke="#2563EB" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-entry)"/>
+<path d="M 1325 330 V 390" fill="none" stroke="#2563EB" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-entry)"/>
+<rect x="120" y="390" width="1560" height="190" rx="20" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2"/>
+<text x="900" y="440" font-size="32" font-weight="700" fill="#7C3AED" text-anchor="middle">共享能力层 · OmniService</text>
+<path d="M 915 467 V 553" fill="none" stroke="#7C3AED" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="160" y="486" font-size="24" font-weight="700" fill="#0F766E" text-anchor="start">只读查询（V1）</text>
+<text x="160" y="520" font-size="23" font-weight="400" fill="#0F172A" text-anchor="start">get_robot_status · list_maps · list_routes</text>
+<text x="160" y="554" font-size="23" font-weight="400" fill="#0F172A" text-anchor="start">get_task · get_inspection_result</text>
+<text x="955" y="486" font-size="24" font-weight="700" fill="#C2410C" text-anchor="start">受控操作（V2）</text>
+<text x="955" y="520" font-size="23" font-weight="400" fill="#0F172A" text-anchor="start">start_inspection · navigate_to · cancel_task</text>
+<text x="955" y="554" font-size="22" font-weight="400" fill="#475569" text-anchor="start">默认仅预览；执行须满足三项条件</text>
+<path d="M 330 580 V 650" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<text x="350" y="623" font-size="20" font-weight="600" fill="#0F766E" text-anchor="start">只读</text>
+<path d="M 900 580 V 650" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<text x="920" y="623" font-size="20" font-weight="600" fill="#0F766E" text-anchor="start">只读</text>
+<path d="M 1470 580 V 650" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<text x="1490" y="623" font-size="20" font-weight="600" fill="#C2410C" text-anchor="start">仅显式执行</text>
+<rect x="120" y="650" width="420" height="145" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="330.0" y="693" font-size="28" font-weight="700" fill="#0F766E" text-anchor="middle">SSH 查询适配器</text>
+<text x="330.0" y="727" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">使用既有 SSH 配置</text>
+<text x="330.0" y="761" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">仅状态订阅与查询服务</text>
+<rect x="690" y="650" width="420" height="145" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="900.0" y="693" font-size="28" font-weight="700" fill="#0F766E" text-anchor="middle">HTTP 查询适配器</text>
+<text x="900.0" y="727" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">访问巡检后端 API</text>
+<text x="900.0" y="761" font-size="22" font-weight="400" fill="#0F172A" text-anchor="middle">读取状态、目录与任务记录</text>
+<rect x="1260" y="650" width="420" height="145" rx="20" fill="#FFF7ED" stroke="#C2410C" stroke-width="2"/>
+<text x="1470.0" y="693" font-size="28" font-weight="700" fill="#C2410C" text-anchor="middle">HTTP 操作适配器</text>
+<text x="1470.0" y="727" font-size="18" font-weight="400" fill="#0F172A" text-anchor="middle">显式执行 + 写入开关 + 机器人允许列表</text>
+<text x="1470.0" y="761" font-size="18" font-weight="400" fill="#0F172A" text-anchor="middle">SSH 路径始终只读</text>
+<rect x="650" y="855" width="1060" height="185" rx="20" fill="#FAFBFD" stroke="#CBD5E1" stroke-width="2"/>
+<text x="1180" y="890" font-size="25" font-weight="700" fill="#475569" text-anchor="middle">既有 omni-inspection 后端</text>
+<rect x="690" y="910" width="420" height="100" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="900.0" y="947" font-size="26" font-weight="700" fill="#0F766E" text-anchor="middle">查询 API</text>
+<text x="900.0" y="981" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">读取后端已有状态与记录</text>
+<rect x="1260" y="910" width="420" height="100" rx="20" fill="#FFF7ED" stroke="#C2410C" stroke-width="2"/>
+<text x="1470.0" y="947" font-size="26" font-weight="700" fill="#C2410C" text-anchor="middle">操作 API</text>
+<text x="1470.0" y="981" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">受理任务请求 / 取消请求</text>
+<path d="M 900 795 V 910" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<path d="M 1470 795 V 910" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<text x="900" y="1074" font-size="20" font-weight="400" fill="#475569" text-anchor="middle">状态与结果沿既有链路上报</text>
+<rect x="1260" y="1090" width="420" height="80" rx="20" fill="#FFF7ED" stroke="#C2410C" stroke-width="2"/>
+<text x="1470.0" y="1139" font-size="25" font-weight="700" fill="#C2410C" text-anchor="middle">既有 Edge / MQTT 链路</text>
+<path d="M 1470 1010 V 1090" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<rect x="100" y="1210" width="1610" height="390" rx="20" fill="#FAFBFD" stroke="#CBD5E1" stroke-width="2"/>
+<text x="690" y="1250" font-size="29" font-weight="700" fill="#475569" text-anchor="start">机器人本地运行时</text>
+<rect x="120" y="1280" width="420" height="230" rx="20" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+<text x="330.0" y="1323" font-size="27" font-weight="700" fill="#0F766E" text-anchor="middle">ROS 只读入口</text>
+<text x="330.0" y="1361" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">读取同一运行时的状态与目录</text>
+<text x="330.0" y="1399" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">状态主题订阅</text>
+<text x="330.0" y="1437" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">地图 / 路线 / 巡检结果查询</text>
+<text x="330.0" y="1475" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">不提供控制入口</text>
+<path d="M 330 795 V 1280" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrow-read)"/>
+<rect x="183" y="968" width="294" height="55" rx="20" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="0"/>
+<text x="330" y="1004" font-size="23" font-weight="600" fill="#0F766E" text-anchor="middle">直达机器人 · 只读</text>
+<rect x="690" y="1280" width="990" height="90" rx="20" fill="#F1F5F9" stroke="#475569" stroke-width="2"/>
+<text x="1185.0" y="1316" font-size="28" font-weight="700" fill="#475569" text-anchor="middle">Mission Manager · 统一任务编排</text>
+<text x="1185.0" y="1348" font-size="21" font-weight="400" fill="#0F172A" text-anchor="middle">接收任务、跟踪状态、协调各子系统</text>
+<path d="M 1470 1170 V 1280" fill="none" stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-write)"/>
+<path d="M 840 1370 V 1425" fill="none" stroke="#475569" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-runtime)"/>
+<rect x="690" y="1425" width="300" height="110" rx="20" fill="#F1F5F9" stroke="#475569" stroke-width="2"/>
+<text x="840.0" y="1457" font-size="24" font-weight="700" fill="#475569" text-anchor="middle">导航、对接与巡检</text>
+<text x="840.0" y="1487" font-size="18" font-weight="400" fill="#0F172A" text-anchor="middle">Planner / Docking</text>
+<text x="840.0" y="1517" font-size="18" font-weight="400" fill="#0F172A" text-anchor="middle">Inspection Executor</text>
+<path d="M 1185 1370 V 1425" fill="none" stroke="#475569" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-runtime)"/>
+<rect x="1035" y="1425" width="300" height="110" rx="20" fill="#F1F5F9" stroke="#475569" stroke-width="2"/>
+<text x="1185.0" y="1467" font-size="25" font-weight="700" fill="#475569" text-anchor="middle">定位与坐标</text>
+<text x="1185.0" y="1500" font-size="18" font-weight="400" fill="#0F172A" text-anchor="middle">SLAM / TF Manager</text>
+<path d="M 1530 1370 V 1425" fill="none" stroke="#475569" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-runtime)"/>
+<rect x="1380" y="1425" width="300" height="110" rx="20" fill="#F1F5F9" stroke="#475569" stroke-width="2"/>
+<text x="1530.0" y="1467" font-size="25" font-weight="700" fill="#475569" text-anchor="middle">机器人执行与安全</text>
+<text x="1530.0" y="1500" font-size="18" font-weight="400" fill="#0F172A" text-anchor="middle">Robot Bridge / 厂商接口</text>
+<text x="900" y="1574" font-size="23" font-weight="500" fill="#475569" text-anchor="middle">实时规划、速度仲裁与急停留在机器人本地；接口契约复用 omni_robot_interfaces</text>
+<rect x="100" y="1640" width="22" height="22" rx="5" fill="#EFF6FF" stroke="#2563EB" stroke-width="1.5"/>
+<text x="134" y="1660" font-size="21" font-weight="500" fill="#475569" text-anchor="start">入口 / 用户请求</text>
+<rect x="400" y="1640" width="22" height="22" rx="5" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="434" y="1660" font-size="21" font-weight="500" fill="#475569" text-anchor="start">共享逻辑 / 预览</text>
+<rect x="710" y="1640" width="22" height="22" rx="5" fill="#ECFDF5" stroke="#0F766E" stroke-width="1.5"/>
+<text x="744" y="1660" font-size="21" font-weight="500" fill="#475569" text-anchor="start">只读查询</text>
+<rect x="950" y="1640" width="22" height="22" rx="5" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.5"/>
+<text x="984" y="1660" font-size="21" font-weight="500" fill="#475569" text-anchor="start">受控操作</text>
+<rect x="1190" y="1640" width="22" height="22" rx="5" fill="#F1F5F9" stroke="#475569" stroke-width="1.5"/>
+<text x="1224" y="1660" font-size="21" font-weight="500" fill="#475569" text-anchor="start">既有平台 / 本地运行时</text>
+<text x="100" y="1716" font-size="21" font-weight="400" fill="#475569" text-anchor="start">箭头表示请求 / 调用方向；查询结果沿原链路返回。V2 默认预览不会进入任何后端。</text>
+</g>
+</svg>
