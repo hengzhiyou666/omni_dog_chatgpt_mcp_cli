@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omni-tools"
+version = "0.1.0"
+description = "MCP and CLI adapters for the Omni robot runtime"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.28,<0.29", "mcp>=1.30,<2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2", "build>=1,<2"]
+
+[project.scripts]
+omni = "omni_tools.cli:main"
+omni-mcp = "omni_tools.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
