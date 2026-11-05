@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "omni": {
-      "command": "/absolute/path/to/omni_dog_chatgpt_mcp_cli/.venv/bin/omni-mcp",
+      "command": "/absolute/path/to/omni_mcp_cli/.venv/bin/omni-mcp",
       "args": ["--transport", "stdio"],
       "env": {
         "OMNI_BACKEND": "ssh",

@@ -5,7 +5,7 @@
 
 ## 当前能力
 
-第一版 [`v0.1.0`](https://github.com/hengzhiyou666/omni_dog_chatgpt_mcp_cli/tree/v0.1.0) 提供下面五项查询，已完成 dog4 只读验证。第二版 `0.2.0` 增加默认预览的任务操作接口；第三版 `0.3.0` 增加通过 SSH 执行的站立、卧下和定距前进接口。当前工作区再增加四项定位与录线操作，共 15 个 MCP 工具（5 个查询、10 个操作）。实机验证范围见[验证记录](docs/VALIDATION.md)。
+第一版 [`v0.1.0`](https://github.com/hengzhiyou666/omni_mcp_cli/tree/v0.1.0) 提供下面五项查询，已完成 dog4 只读验证。第二版 `0.2.0` 增加默认预览的任务操作接口；第三版 `0.3.0` 增加通过 SSH 执行的站立、卧下和定距前进接口。当前工作区再增加四项定位与录线操作，共 15 个 MCP 工具（5 个查询、10 个操作）。实机验证范围见[验证记录](docs/VALIDATION.md)。
 
 | MCP 工具 | CLI | 功能 |
 |---|---|---|
@@ -43,8 +43,8 @@
 ## 安装
 
 ```bash
-git clone https://github.com/hengzhiyou666/omni_dog_chatgpt_mcp_cli.git
-cd omni_dog_chatgpt_mcp_cli
+git clone https://github.com/hengzhiyou666/omni_mcp_cli.git
+cd omni_mcp_cli
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/omni --help
@@ -68,9 +68,26 @@ python3 -m venv .venv
 一个 SSH 配置绑定一个机器人；传入其他机器人编号会被拒绝。可用 `--ssh-host` 或 `OMNI_SSH_HOST` 切换已配置的 SSH 别名。
 SSH 的查询路径保持只读；独立写入路径提供站立、卧下、定距前进及定位与录线。巡检启动、导航、取消仍只能经 HTTP 后台进入现有 Mission Manager 调度链。
 
+## 狗端本机 ROS：local 后端
+
+工程部署到 `/userdata/1_heng/omni_mcp_cli` 后，可在机器狗本机使用 `OMNI_BACKEND=local`，直接运行与 SSH 完全相同的固定 ROS worker，无需 SSH 连接自身。CLI 和 MCP 工具名、参数及返回结构保持一致；后台必须已有 Mission Manager、Bridge 和对应 ROS 消息包。worker 从本机 Mission Manager 进程读取 ROS 环境。
+
+```bash
+export OMNI_BACKEND=local
+export OMNI_ROBOT_ID=dog4
+export OMNI_ALLOW_WRITES=0
+/userdata/1_heng/omni_mcp_cli/.venv/bin/omni robot status --json
+```
+
+真实动作仍需 `OMNI_ALLOW_WRITES=1`、`OMNI_ALLOWED_ROBOTS=dog4` 和本次 `--execute`／`execute=true`。local 支持五项查询、姿态、前进和四项定位录线操作；巡检启动、到点导航、取消任务的执行仍要求 HTTP 后端。狗端 MCP 配置见 [mcp-local.json](examples/mcp-local.json)。
+
+任务运行器可设置每任务独立的绝对路径 `OMNI_CANCEL_FILE`，其父目录必须存在且可写。取消时先创建该标记；动作入口与执行循环检查它，前进会走原有零速、停车确认和租约释放流程。任何动作失败也会创建标记，阻止该任务后续动作，查询仍可使用。local worker 以独立进程组运行，父进程退出触发协作取消；超时先请求清理并等待5秒，无法确认的结果明确返回未知。
+
+动作启动前原子写入 `<OMNI_CANCEL_FILE>.result.json`：`{"state":"running","operation":"move_forward","result":null}`；结束时写入 `state:"finished"`，`result` 为原始 worker `{ok,data}` 或 `{ok:false,error}`。`set_posture` 覆盖起立／卧下，其余 worker 操作名同工具名。收据先于标准输出写入，查询不会覆盖它。`finished` 只表示 worker 结束；前进停车是否确认必须读取 `result.data` 或 `result.error.details` 中的 `stop_confirmed` 和 `control_released`，不能由模型进程退出推断。取消定位／录线等待不会自动丢弃数据或切回空闲。
+
 ## 定位与路线录制
 
-四项操作与姿态动作共用 SSH 配置、写入开关和机器人允许列表，默认仅本地预览；执行需要 `--execute`（MCP 为 `execute=true`）。无需修改机器人部署产物。
+四项操作与姿态动作共用 SSH／local 后端、写入开关和机器人允许列表，默认仅本地预览；执行需要 `--execute`（MCP 为 `execute=true`）。无需修改机器人部署产物。
 
 `MAP_ID`、`MAP_VERSION`、`MAP_CHECKSUM` 必须取自 `omni maps list --json` 的同一行；初始位置 `--initial-x/y/z` 单位为米，`--initial-yaw` 为弧度，默认均为 0。
 
@@ -91,7 +108,7 @@ omni --timeout 60 runtime idle --json
 
 ## 站立与卧下
 
-MCP 的 `stand_up` 和 `lie_down` 与 CLI 共用业务实现，默认只生成本地预览。真实姿态执行需要 SSH 后端、`OMNI_ALLOW_WRITES=1`、目标位于 `OMNI_ALLOWED_ROBOTS`，以及本次 `execute=true`（CLI 为 `--execute`）。
+MCP 的 `stand_up` 和 `lie_down` 与 CLI 共用业务实现，默认只生成本地预览。真实姿态执行需要 SSH 或 local 后端、`OMNI_ALLOW_WRITES=1`、目标位于 `OMNI_ALLOWED_ROBOTS`，以及本次 `execute=true`（CLI 为 `--execute`）。
 
 ```bash
 export OMNI_BACKEND=ssh
@@ -125,7 +142,7 @@ Bridge 返回成功表示厂商动作接口已应答，**不能据此确认机�
 
 ## 向前定距运动
 
-`move_forward(distance_m=1.0, robot_id=None, execute=False)` 与 CLI 共用执行实现，距离范围为 0.1–2.0 米，默认仅预览。真实执行与姿态动作使用相同的 SSH 后端、写入开关、机器人允许列表和显式执行条件；沿用上节环境配置后可运行：
+`move_forward(distance_m=1.0, robot_id=None, execute=False, measurement_mode="odometry")` 与 CLI 共用执行实现，距离范围为 0.1–2.0 米，默认仅预览。真实执行与姿态动作使用相同的 SSH／local 后端、写入开关、机器人允许列表和显式执行条件；沿用上节环境配置后可运行：
 
 ```bash
 # 预览：不访问机器狗
@@ -135,9 +152,14 @@ Bridge 返回成功表示厂商动作接口已应答，**不能据此确认机�
 .venv/bin/omni --timeout 40 motion forward --distance 1 --execute --json
 # 等价中文入口
 .venv/bin/omni --timeout 40 向前 --distance 1 --execute --json
+
+# 无 SLAM 时显式选择定时估算；不会自动从里程计模式切换
+.venv/bin/omni --timeout 40 motion forward --distance 1 --measurement-mode timed --execute --json
 ```
 
 前进期间由狗端执行器持有独占 APP 租约，在本地以 10 Hz（与 OmniDeck 默认频率一致）维持低速指令，并使用厂商/里程计反馈的相对 XY 位移闭环测距。该距离受反馈精度、延迟和停车过程影响，表示约定距离的相对运动，不构成 canonical 定位坐标中的精确到点导航验收。反馈过期等异常触发停车；结束时显式发送零速度并确认静止，随后释放租约。过程不会依赖 PC 每次模型调用维持控制。
+
+默认 `odometry` 保持上述测距检查。`timed` 保持 0.35 的前进指令，按 dog4 现场估计地面速度 0.20 m/s 计算 `distance_m/0.20` 秒（1米为5秒），不要求 SLAM；控制权、原生运动状态、超时、取消和释放检查仍保留。结果 `completion="estimated_time"`、`actual_distance_m=null`；停车仅确认新鲜的下游零速度指令，`stop_feedback_scope="downstream_command"`，不代表独立测得机体静止或实际移动距离。
 
 此接口的真机结果以[验证记录](docs/VALIDATION.md)为准。
 

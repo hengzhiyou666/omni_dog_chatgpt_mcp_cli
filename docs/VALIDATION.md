@@ -1,5 +1,13 @@
 # 验证记录
 
+## 狗端 local 后端与任务取消 — 2026-11-05（仅 PC 离线）
+
+- 新增 `OMNI_BACKEND=local`，直接复用原固定 ROS worker、状态门禁和返回结构，不通过 SSH 连接本机；原 PC SSH 路径保留。HTTP 任务执行未扩展到 local。
+- local 使用隔离 Python 子进程和 Linux 父进程退出信号；超时先 TERM 并等待清理。worker 保持 ROS context 可用，取消进入原停车／释放流程；清理无法确认时保留 unknown 与 `stop_confirmed=false`。
+- 可选每任务 `OMNI_CANCEL_FILE` 阻止失败／取消后的后续动作；动作原子写 running／finished 收据，查询不覆盖。bootstrap 未发送动作时保留 `command_sent=false`，运行中取消保留实际停车和租约释放结果。
+- 完整离线回归 **642 项通过**（含原 SSH、HTTP、CLI、MCP 协议和新增 local／取消测试）。local 与取消专项31项通过；`git diff --check` 无空白问题。
+- 仅修改 PC 本地文件、修复目录改名后的 editable 安装；未连接 dog4、未部署、未执行任何机器人动作。真实 ROS 环境和实体取消停车尚待用户回来后验证。
+
 ## 定位与录线 MCP / CLI — 2026-11-05（本轮）
 
 ### 用户返场后的实机验证

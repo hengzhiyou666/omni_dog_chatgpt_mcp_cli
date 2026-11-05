@@ -12,7 +12,9 @@ import uuid
 
 if globals().get("__package__"):
     from .remote_probe import (ENV_KEYS, ProbeError, _emit, _error,
-                               catalog_rows, runtime_environment, sanitize, utc_now)
+                               catalog_rows, runtime_environment, sanitize, utc_now,
+                               check_cancelled, install_cancellation_handlers,
+                               restore_cancellation_handlers)
 
 
 RUNTIME_OPERATIONS = frozenset({"start_localization", "start_route_recording",
@@ -54,6 +56,7 @@ def validate_runtime_request(request):
 def runtime_bootstrap(payload):
     try:
         validate_runtime_request(payload["request"])
+        check_cancelled()
         environment = dict(os.environ)
         for key in ENV_KEYS:
             environment.pop(key, None)
@@ -65,7 +68,10 @@ def runtime_bootstrap(payload):
         script += "n['runtime_worker'](" + repr(payload["request"]) + "," + repr(payload["marker"]) + ")"
         os.execve(sys.executable, [sys.executable, "-B", "-u", "-c", script], environment)
     except Exception as error:
-        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": _error(error)})
+        failure = _error(error)
+        failure["details"].update(command_sent=False, retry_safe=False)
+        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": failure},
+              operation=payload.get("request", {}).get("operation", "runtime"))
 
 
 def check_runtime_preflight(request, runtime, authority, robot):
@@ -97,20 +103,24 @@ def check_runtime_preflight(request, runtime, authority, robot):
 
 def runtime_worker(request, marker):
     session = None
+    handlers = None
     try:
         validate_runtime_request(request)
+        handlers = install_cancellation_handlers()
+        check_cancelled()
         def timed_out(_signum, _frame):
             raise ProbeError("timeout", "Runtime operation exceeded its time limit")
         signal.signal(signal.SIGALRM, timed_out)
         signal.setitimer(signal.ITIMER_REAL, request["timeout"] + 1)
         session = RuntimeSession(request["timeout"])
-        _emit(marker, {"ok": True, "data": session.execute(request)})
+        _emit(marker, {"ok": True, "data": session.execute(request)}, operation=request["operation"])
     except Exception as error:
         if not isinstance(error, ProbeError):
             error = ProbeError("runtime_failed", "Runtime operation failed", {"exception_type": type(error).__name__})
         error.details.update(session.evidence() if session is not None else {"command_sent": False})
         error.details["retry_safe"] = False
-        _emit(marker, {"ok": False, "error": _error(error)})
+        _emit(marker, {"ok": False, "error": _error(error)},
+              operation=request.get("operation", "runtime") if isinstance(request, dict) else "runtime")
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         if session is not None:
@@ -118,6 +128,7 @@ def runtime_worker(request, marker):
                 session.close()
             except Exception:
                 pass
+        restore_cancellation_handlers(handlers)
 
 
 class RuntimeSession:
@@ -125,6 +136,7 @@ class RuntimeSession:
         try:
             import rclpy
             from rclpy.node import Node
+            from rclpy.signals import SignalHandlerOptions
             from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
             from rosidl_runtime_py.convert import message_to_ordereddict
             from rosidl_runtime_py.utilities import get_message, get_service
@@ -139,7 +151,8 @@ class RuntimeSession:
         self.request_id = ""
         self.sent_at = 0.0
         self.generation = None
-        rclpy.init(args=["--ros-args", "--disable-external-lib-logs", "--disable-rosout-logs", "--disable-stdout-logs"])
+        rclpy.init(args=["--ros-args", "--disable-external-lib-logs", "--disable-rosout-logs", "--disable-stdout-logs"],
+                   signal_handler_options=SignalHandlerOptions.NO)
         self.node = Node("omni_tools_runtime_" + str(os.getpid()), enable_rosout=False,
                          start_parameter_services=False, use_global_arguments=False)
         live = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.VOLATILE)
@@ -168,6 +181,7 @@ class RuntimeSession:
 
     def wait(self, predicate):
         while True:
+            check_cancelled()
             value = predicate()
             if value:
                 return value

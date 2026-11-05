@@ -21,7 +21,8 @@ def test_preview_never_connects_and_reports_bounded_parameters():
     api, backend = service(allow_writes=False, allowed_robots=())
     result = api.move_forward(1.0)
     assert result["data"]["preview"] is True
-    assert result["data"]["parameters"] == {"robot_id": "dog4", "distance_m": 1.0}
+    assert result["data"]["parameters"] == {
+        "robot_id": "dog4", "distance_m": 1.0, "measurement_mode": "odometry"}
     assert backend.mock_calls == []
 
 
@@ -61,6 +62,45 @@ def test_execution_preserves_measured_evidence():
     backend.move_forward.assert_called_once_with(1.0, "dog4")
     assert result["data"]["measured_distance_m"] == 0.99
     assert result["data"]["stop_confirmed"] is True
+
+
+def test_timed_preview_names_the_estimate_without_connecting():
+    api, backend = service(allow_writes=False, allowed_robots=())
+    data = api.move_forward(measurement_mode="timed")["data"]
+    assert data["parameters"]["measurement_mode"] == "timed"
+    assert "Actual distance is not measured" in data["completion_note"]
+    assert "fresh continuous robot odometry" not in data["execution_requirements"]
+    assert backend.mock_calls == []
+
+
+@pytest.mark.parametrize("mode", [None, True, 1, [], {}, "", "auto", "TIMED"])
+def test_invalid_measurement_mode_never_connects(mode):
+    api, backend = service()
+    with pytest.raises(OmniError, match="measurement_mode"):
+        api.move_forward(execute=True, measurement_mode=mode)
+    assert backend.mock_calls == []
+
+
+def test_timed_execution_preserves_explicit_mode_and_unmeasured_distance():
+    api, backend = service()
+    backend.move_forward.return_value = {
+        "completion": "estimated_time", "actual_distance_m": None,
+        "stop_confirmed": True, "stop_feedback_scope": "downstream_command",
+        "control_released": True,
+    }
+    result = api.move_forward(1.0, execute=True, measurement_mode="timed")
+    backend.move_forward.assert_called_once_with(1.0, "dog4", "timed")
+    assert result["data"]["measurement_mode"] == "timed"
+    assert result["data"]["completion"] == "estimated_time"
+    assert result["data"]["actual_distance_m"] is None
+
+
+def test_timed_execution_keeps_write_permission_gate():
+    api, backend = service(allow_writes=False)
+    with pytest.raises(OmniError) as error:
+        api.move_forward(execute=True, measurement_mode="timed")
+    assert error.value.code == "writes_disabled"
+    assert backend.mock_calls == []
 
 
 def test_uncertain_result_is_not_retried_or_replaced_with_success():

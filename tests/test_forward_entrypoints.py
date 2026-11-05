@@ -1,5 +1,6 @@
 """Forward-motion CLI and MCP dispatch tests; no robot or network is used."""
 import json
+from unittest.mock import Mock
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
@@ -72,10 +73,38 @@ async def test_forward_mcp_schema_is_an_explicit_write_tool():
     assert tool.inputSchema["properties"]["distance_m"]["default"] == 1.0
     assert tool.inputSchema["properties"]["execute"]["type"] == "boolean"
     assert tool.inputSchema["properties"]["execute"]["default"] is False
+    assert tool.inputSchema["properties"]["measurement_mode"]["default"] == "odometry"
+    assert tool.inputSchema["properties"]["measurement_mode"]["enum"] == ["odometry", "timed"]
     assert "body-forward" in tool.description
     assert "0.1..2" in tool.description
     assert "feedback" in tool.description
     assert service.calls == []
+
+
+@pytest.mark.parametrize("arguments", [["motion", "forward"], ["向前"]])
+def test_forward_cli_dispatches_explicit_timed_mode(arguments, capsys):
+    service = Mock()
+    service.move_forward.return_value = {"ok": True}
+    assert run(arguments + ["--measurement-mode", "timed", "--execute", "--json"], service=service) == 0
+    service.move_forward.assert_called_once_with(1.0, None, True, "timed")
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_forward_cli_rejects_unknown_measurement_mode(capsys):
+    service = StubForwardService()
+    assert run(["向前", "--measurement-mode", "auto", "--execute"], service=service) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "invalid_argument"
+    assert service.calls == []
+
+
+async def test_forward_mcp_dispatches_explicit_timed_mode():
+    service = Mock()
+    service.move_forward.return_value = {"ok": True}
+    result = await create_server(service=service).call_tool("move_forward", {
+        "distance_m": 1.0, "execute": True, "measurement_mode": "timed",
+    })
+    assert result.isError is False
+    service.move_forward.assert_called_once_with(1.0, None, True, "timed")
 
 
 async def test_forward_mcp_default_preview_and_explicit_execution_dispatch():
@@ -97,6 +126,7 @@ async def test_forward_mcp_default_preview_and_explicit_execution_dispatch():
 @pytest.mark.parametrize(("field", "value"), [
     ("execute", "true"), ("execute", 1), ("execute", None),
     ("distance_m", "1.0"), ("distance_m", True), ("distance_m", None),
+    ("measurement_mode", "auto"), ("measurement_mode", True), ("measurement_mode", None),
 ])
 async def test_forward_mcp_rejects_wrong_parameter_types_before_dispatch(field, value):
     service = StubForwardService()

@@ -28,8 +28,8 @@ class Settings:
             identifier(robot, "allowed robot")
             if "*" in robot:
                 raise OmniError("configuration_error", "Robot allowlist cannot contain wildcards")
-        if self.backend not in {"ssh", "http"}:
-            raise OmniError("configuration_error", "OMNI_BACKEND must be ssh or http")
+        if self.backend not in {"ssh", "http", "local"}:
+            raise OmniError("configuration_error", "OMNI_BACKEND must be ssh, local or http")
         identifier(self.robot_id, "robot_id")
         if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}", self.ssh_host):
             raise OmniError("configuration_error", "Invalid SSH host alias")

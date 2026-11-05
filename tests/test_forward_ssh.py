@@ -102,6 +102,33 @@ def test_motion_bootstrap_compiles_shared_sources_in_order(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == ["read", "posture", "motion", "move_forward"]
 
 
+def test_timed_mode_is_explicit_in_json_payload_and_preserves_estimate(monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        payload = json.loads(kwargs["input"])
+        calls.append(payload["request"])
+        assert payload["request"]["measurement_mode"] == "timed"
+        assert "timed" not in command[-1]
+        return response(payload, data={"completion": "estimated_time", "actual_distance_m": None,
+                                       "stop_confirmed": True, "control_released": True})
+
+    monkeypatch.setattr(subprocess, "run", run)
+    result = SSHBackend(enabled()).move_forward(1.0, "dog4", "timed")
+    assert len(calls) == 1
+    assert result["completion"] == "estimated_time"
+    assert result["actual_distance_m"] is None
+
+
+@pytest.mark.parametrize("mode", [None, True, [], "auto", ""])
+def test_invalid_measurement_mode_is_rejected_before_ssh(monkeypatch, mode):
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(1))
+    with pytest.raises(OmniError, match="measurement_mode"):
+        SSHBackend(enabled()).move_forward(1.0, "dog4", mode)
+    assert calls == []
+
+
 @pytest.mark.parametrize("failure", [
     "timeout", "os_error", "disconnect", "missing_marker", "duplicate_marker",
     "invalid_json", "invalid_envelope", "nonzero_success", "oversized",

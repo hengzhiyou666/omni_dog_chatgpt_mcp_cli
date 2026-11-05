@@ -12,8 +12,10 @@ import signal
 import sys
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+import tempfile
 
 
 ENV_KEYS = frozenset({
@@ -44,12 +46,100 @@ READ_SERVICES = {
     "get_inspection_result": ("/omni/mission/results", "omni_robot_interfaces/srv/GetCheckpointResults"),
 }
 OPERATIONS = frozenset(READ_SERVICES) | {"get_robot_status", "get_task"}
+_CLEANING_UP = False
+_CANCELLATION_HANDLERS_ACTIVE = False
 
 
 class ProbeError(Exception):
     def __init__(self, code, message, details=None):
         super().__init__(message)
         self.code, self.message, self.details = code, message, details or {}
+
+
+def _cancel_path(*, force_local=False):
+    if not force_local and os.environ.get("OMNI_BACKEND") != "local":
+        return None
+    value = os.environ.get("OMNI_CANCEL_FILE")
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        raise ProbeError("configuration_error", "OMNI_CANCEL_FILE must be an absolute path")
+    return path
+
+
+def check_cancelled(*, force_local=False):
+    path = _cancel_path(force_local=force_local)
+    if not _CLEANING_UP and path is not None and path.exists():
+        raise ProbeError("cancelled", "This task was cancelled; no further action may start", {"retry_safe": False})
+
+
+def write_receipt(operation, result, state="finished", *, force_local=False):
+    path = _cancel_path(force_local=force_local)
+    if path is None:
+        return
+    if state == "finished" and not (isinstance(result, dict) and result.get("ok") is True):
+        path.touch(exist_ok=True)
+    target = Path(str(path) + ".result.json")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                         prefix=target.name + ".", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(sanitize({"state": state, "operation": operation, "result": result}),
+                      output, ensure_ascii=False, allow_nan=False)
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def install_cancellation_handlers():
+    global _CLEANING_UP, _CANCELLATION_HANDLERS_ACTIVE
+    state = ({sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)},
+             signal.getitimer(signal.ITIMER_REAL), _CLEANING_UP, _CANCELLATION_HANDLERS_ACTIVE)
+    def cancelled(_signum, _frame):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.setitimer(signal.ITIMER_REAL, 3.5)
+        raise ProbeError("cancelled", "Operation cancelled; cleanup is required", {"retry_safe": False})
+    signal.signal(signal.SIGTERM, cancelled)
+    signal.signal(signal.SIGINT, cancelled)
+    _CLEANING_UP, _CANCELLATION_HANDLERS_ACTIVE = False, True
+    return state
+
+
+def restore_cancellation_handlers(state):
+    global _CLEANING_UP, _CANCELLATION_HANDLERS_ACTIVE
+    if state is None:
+        return
+    handlers, timer, _CLEANING_UP, _CANCELLATION_HANDLERS_ACTIVE = state
+    for sig, handler in handlers.items():
+        signal.signal(sig, handler)
+    signal.setitimer(signal.ITIMER_REAL, *timer)
+
+
+@contextmanager
+def begin_cleanup():
+    """Keep cancellation from interrupting the bounded zero-stop/release path."""
+    global _CLEANING_UP
+    previous = _CLEANING_UP
+    _CLEANING_UP = True
+    handlers = timer = None
+    if _CANCELLATION_HANDLERS_ACTIVE:
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+        timer = signal.getitimer(signal.ITIMER_REAL)
+        for sig in handlers:
+            signal.signal(sig, signal.SIG_IGN)
+        signal.setitimer(signal.ITIMER_REAL, 3.5)
+    try:
+        yield
+    finally:
+        _CLEANING_UP = previous
+        if handlers is not None:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+            signal.setitimer(signal.ITIMER_REAL, *timer)
 
 
 def sanitize(value):
@@ -109,12 +199,20 @@ def validate_request(request):
             raise ProbeError("invalid_argument", "Invalid task_id")
 
 
-def _emit(marker, envelope):
+def _emit(marker, envelope, operation=None):
     encoded = json.dumps(sanitize(envelope), ensure_ascii=False, allow_nan=False)
     if len(encoded.encode("utf-8")) > 3 * 1024 * 1024:
         encoded = json.dumps({"ok": False, "error": {"code": "response_too_large",
                               "message": "Robot query exceeded the response limit", "details": {}}})
-    print(marker + encoded, flush=True)
+    if operation is None:
+        print(marker + encoded, flush=True)
+        return
+    with begin_cleanup():
+        write_receipt(operation, json.loads(encoded))
+        try:
+            print(marker + encoded, flush=True)
+        except BrokenPipeError:
+            pass  # The receipt already preserves the actual cleanup outcome.
 
 
 def _error(error):

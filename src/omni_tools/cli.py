@@ -15,9 +15,9 @@ class Parser(argparse.ArgumentParser):
 
 
 def build_parser():
-    parser = Parser(prog="omni", description="Omni robot queries and preview-first controls via SSH or HTTP")
+    parser = Parser(prog="omni", description="Omni robot queries and preview-first controls via local ROS, SSH or HTTP")
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("--backend", choices=["ssh", "http"], default=None)
+    parser.add_argument("--backend", choices=["ssh", "local", "http"], default=None)
     parser.add_argument("--ssh-host", default=None)
     parser.add_argument("--timeout", type=float, default=None)
     groups = parser.add_subparsers(dest="group", required=True)
@@ -86,6 +86,8 @@ def build_parser():
         cmd.set_defaults(motion_method="move_forward")
         cmd.add_argument("--distance", dest="distance_m", type=float, default=1.0,
                          help="Body-forward distance in meters, 0.1..2 (default: 1)")
+        cmd.add_argument("--measurement-mode", choices=("odometry", "timed"), default="odometry",
+                         help="odometry measures distance; timed estimates at 0.35 m/s without SLAM")
         cmd.add_argument("--robot", default=None)
         cmd.add_argument("--execute", action="store_true",
                          help="Execute with robot-side feedback and configured write permission; otherwise preview")
@@ -142,7 +144,10 @@ def run(argv=None, *, service=None):
         elif getattr(args, "posture_method", None):
             result = getattr(service, args.posture_method)(args.robot, args.execute)
         elif getattr(args, "motion_method", None):
-            result = service.move_forward(args.distance_m, args.robot, args.execute)
+            if args.measurement_mode == "odometry":
+                result = service.move_forward(args.distance_m, args.robot, args.execute)
+            else:
+                result = service.move_forward(args.distance_m, args.robot, args.execute, args.measurement_mode)
         elif args.group == "robot":
             result = service.get_robot_status(args.robot_id)
         elif args.group == "maps":

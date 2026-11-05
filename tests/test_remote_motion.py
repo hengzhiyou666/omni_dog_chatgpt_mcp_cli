@@ -59,6 +59,11 @@ class FakeSession:
                 raise RuntimeError("Publisher failed")
             raise ProbeError(self.fail, "Movement failed")
 
+    def drive_timed(self, distance, client_id):
+        self.calls.append(("drive_timed", distance))
+        if self.fail:
+            raise ProbeError(self.fail, "Movement failed")
+
     def stop(self, client_id):
         self.calls.append("stop")
         return self.stopped
@@ -175,6 +180,39 @@ def test_release_failure_is_reported_without_concealing_confirmed_stop():
     assert result["warnings"]
 
 
+def test_timed_mode_is_explicit_and_never_claims_measured_distance():
+    session = FakeSession(measured=42)
+    result = motion.execute_forward(request(measurement_mode="timed"), session)
+    assert ("drive_timed", 1.0) in session.calls
+    assert "origin" not in session.calls
+    assert session.calls[-2:] == ["stop", "release"]
+    assert result["completion"] == "estimated_time"
+    assert result["actual_distance_m"] is result["odometry_topic"] is None
+    assert result["command_speed_mps"] == 0.35
+    assert result["estimated_speed_mps"] == 0.20
+    assert result["target_duration_sec"] == 5.0
+    assert result["stop_feedback_scope"] == "downstream_command"
+    assert result["warnings"]
+
+
+@pytest.mark.parametrize("failure", ["timeout", "control_lost", "cancelled", "locomotion_stale"])
+def test_timed_failure_still_stops_releases_and_never_retries(failure):
+    session = FakeSession(fail=failure)
+    with pytest.raises(ProbeError) as caught:
+        motion.execute_forward(request(measurement_mode="timed"), session)
+    assert session.calls.count("loco") == 1
+    assert session.calls[-2:] == ["stop", "release"]
+    assert caught.value.details["retry_safe"] is False
+    assert caught.value.details["stop_confirmed"] is True
+    assert caught.value.details["actual_distance_m"] is None
+
+
+def test_timed_mode_does_not_accept_unconfirmed_stop():
+    with pytest.raises(ProbeError) as caught:
+        motion.execute_forward(request(measurement_mode="timed"), FakeSession(stopped=False))
+    assert caught.value.code == "stop_unconfirmed"
+
+
 @pytest.mark.parametrize("distance", [True, False, None, "1", 0, 0.09, 2.01, math.inf, math.nan, 10**1000])
 def test_invalid_distances_do_not_touch_transport(distance):
     session = FakeSession()
@@ -184,7 +222,8 @@ def test_invalid_distances_do_not_touch_transport(distance):
 
 
 @pytest.mark.parametrize("changes", [{"operation": "turn"}, {"robot_id": "dog\n4"},
-                                     {"timeout": True}, {"timeout": math.inf}, {"timeout": 121}])
+                                     {"timeout": True}, {"timeout": math.inf}, {"timeout": 121},
+                                     {"measurement_mode": "automatic"}, {"measurement_mode": None}])
 def test_other_invalid_requests(changes):
     with pytest.raises(ProbeError):
         motion.validate_motion_request(request(**changes))
@@ -254,13 +293,14 @@ class SimulatedDrive(motion.MotionSession):
     def publish_velocity(self, client_id, speed):
         self.speeds.append(speed)
 
-    def cycle(self):
-        self.clock.now += motion.CONTROL_PERIOD
+    def cycle(self, until=None):
+        step = motion.CONTROL_PERIOD if until is None else min(motion.CONTROL_PERIOD, until - self.clock.now)
+        self.clock.now += step
         speed = self.speeds[-1] if self.speeds else 0
         # A zero command is not an instantaneous physical stop: model the
         # ~0.09 m tail observed after real App input at this walking speed.
         self.physical_speed = speed if speed else self.physical_speed * 0.72
-        self.current = point(self.current["x"] + (0 if self.stalled else self.physical_speed * motion.CONTROL_PERIOD),
+        self.current = point(self.current["x"] + (0 if self.stalled else self.physical_speed * step),
                              stamp=1000 + self.clock.now, received=self.clock.now)
         # Five-Hz odometry, matching dog4's actual producer.
         if not self.odometry or self.clock.now - self.odometry[-1]["received"] >= 0.19:
@@ -469,8 +509,8 @@ class NativeFeedbackSession(SimulatedDrive):
             motion=self.unsafe_motion if self.unsafe_at is not None and self.clock.now >= self.unsafe_at else 0,
             current_action=action, stamp_ns=int((1000 + self.clock.now) * 1e9)))
 
-    def cycle(self):
-        super().cycle()
+    def cycle(self, until=None):
+        super().cycle(until)
         self.feedback()
         # The Bridge acknowledges before the physical FSM transitions.
         if self.loco_sent:
@@ -486,6 +526,84 @@ def test_acknowledgement_cannot_start_forward_before_actual_standing_feedback(mo
     assert session.commands == ["loco:app-test"]
     assert set(session.speeds) == {0.0}
     assert session._fresh_locomotion()["motion"] == 0  # Normal, not a walking indicator.
+
+
+def test_timed_entry_drive_and_stop_need_no_odometry_and_bound_command_duration(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(motion.time, "monotonic", lambda: clock.now)
+    session = NativeFeedbackSession(clock, ready_at=0)
+    session.measurement_mode = "timed"
+    session.odometry.clear()
+    session._fresh_odometry = lambda: pytest.fail("Timed mode must not read odometry")
+    assert session.start_locomotion("app-test") == "success:loco"
+    started = clock.now
+    session.drive_timed(1, "app-test")
+    assert clock.now - started == pytest.approx(5.0)
+    assert max(session.speeds) == 0.35
+    assert session.stop("app-test") is True
+    assert session.speeds[-1] == 0
+
+
+def test_timed_deadline_also_bounds_lease_renewal_and_restores_cleanup_budget(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(motion.time, "monotonic", lambda: clock.now)
+
+    class BlockedRenewal(NativeFeedbackSession):
+        def _maintain(self, client_id):
+            assert self.deadline == pytest.approx(5.0)
+            clock.now = self.deadline
+            raise ProbeError("timeout", "Authority renewal did not return before the target deadline")
+
+    session = BlockedRenewal(clock, ready_at=0)
+    session.measurement_mode = "timed"
+    with pytest.raises(ProbeError) as caught:
+        session.drive_timed(1, "app-test")
+    assert caught.value.code == "timeout"
+    assert session.deadline == 30
+    assert session.speeds == []
+
+
+@pytest.mark.parametrize("unsafe_motion", [1, 2])
+def test_timed_drive_keeps_native_emergency_and_recovery_gate(monkeypatch, unsafe_motion):
+    clock = Clock()
+    monkeypatch.setattr(motion.time, "monotonic", lambda: clock.now)
+    session = NativeFeedbackSession(clock, ready_at=0, unsafe_at=0.2, unsafe_motion=unsafe_motion)
+    session.measurement_mode = "timed"
+    with pytest.raises(ProbeError) as caught:
+        session.drive_timed(1, "app-test")
+    assert caught.value.code == "locomotion_unsafe"
+    assert clock.now == pytest.approx(0.2)
+
+
+def test_timed_stop_requires_fresh_native_health_and_downstream_zero(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(motion.time, "monotonic", lambda: clock.now)
+    session = NativeFeedbackSession(clock, ready_at=0, unsafe_at=0.2)
+    session.measurement_mode = "timed"
+    assert session.stop("app-test") is False
+    assert session.stop_feedback["reason"] == "locomotion_unsafe"
+
+    clock.now = 0
+    session = NativeFeedbackSession(clock, ready_at=0)
+    session.measurement_mode = "timed"
+    session.downstream_zero = False
+    session.velocity = (0,) * 6
+    session.velocity_received = -1
+    assert session.stop("app-test") is False
+    assert session.stop_feedback["reason"] == "downstream_zero_unconfirmed"
+
+
+def test_timed_prepare_requires_bridge_and_native_feedback_but_not_odometry(monkeypatch):
+    monkeypatch.setattr(motion.PostureSession, "prepare", lambda _session: None)
+    session = motion.MotionSession.__new__(motion.MotionSession)
+    session.measurement_mode = "timed"
+    session.deadline = math.inf
+    session.odometry = []
+    session.native_locomotion = {"posture": 1, "motion": 0}
+    session.teleop = session.locomotion = SimpleNamespace(get_subscription_count=lambda: 1)
+    session._fresh_odometry = lambda: pytest.fail("Timed prepare must not require SLAM")
+    session._fresh_locomotion = lambda: session.native_locomotion
+    session.prepare()
 
 
 def test_ack_without_standing_feedback_never_permits_nonzero_velocity(monkeypatch):

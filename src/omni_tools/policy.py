@@ -10,22 +10,22 @@ def require_write(settings: Settings, robot_id: str) -> None:
 
 
 def require_posture_write(settings: Settings, robot_id: str) -> None:
-    """Only the two bounded posture actions may execute over SSH."""
-    if settings.backend != "ssh":
-        raise OmniError("unsupported_backend", "Posture operations require the SSH backend")
+    """Fixed posture actions require SSH or local ROS and explicit write policy."""
+    if settings.backend not in {"ssh", "local"}:
+        raise OmniError("unsupported_backend", "Posture operations require SSH or local ROS")
     _require_enabled(settings, robot_id)
 
 
 def require_motion_write(settings: Settings, robot_id: str) -> None:
-    """Bounded robot-side motion requires an explicitly enabled SSH target."""
-    if settings.backend != "ssh":
-        raise OmniError("unsupported_backend", "Bounded motion requires the SSH backend")
+    """Bounded robot-side motion requires an explicitly enabled ROS target."""
+    if settings.backend not in {"ssh", "local"}:
+        raise OmniError("unsupported_backend", "Bounded motion requires SSH or local ROS")
     _require_enabled(settings, robot_id)
 
 
 def require_runtime_write(settings: Settings, robot_id: str) -> None:
-    if settings.backend != "ssh":
-        raise OmniError("unsupported_backend", "Runtime operations require the SSH backend")
+    if settings.backend not in {"ssh", "local"}:
+        raise OmniError("unsupported_backend", "Runtime operations require SSH or local ROS")
     _require_enabled(settings, robot_id)
 
 

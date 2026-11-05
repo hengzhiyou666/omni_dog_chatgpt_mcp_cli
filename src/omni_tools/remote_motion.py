@@ -1,7 +1,8 @@
-"""One bounded, measured forward movement through Bridge's APP authority.
+"""One bounded forward movement through Bridge's APP authority.
 
 SLAM's tracking-point displacement measures travel; its absolute yaw is never
 treated as body heading. Body-forward velocity always uses typed TeleopCommand.
+An explicit timed mode estimates travel without requiring SLAM odometry.
 """
 from __future__ import annotations
 
@@ -15,7 +16,9 @@ import uuid
 
 if globals().get("__package__"):
     from .remote_probe import (ENV_KEYS, ProbeError, _emit, _error,
-                               runtime_environment, sanitize, utc_now)
+                               runtime_environment, sanitize, utc_now, begin_cleanup,
+                               check_cancelled, install_cancellation_handlers,
+                               restore_cancellation_handlers)
     from .remote_posture import PostureSession
 
 
@@ -30,11 +33,15 @@ LOCOMOTION_MAX_AGE = 0.8
 CONTROL_PERIOD = 0.1  # Match OmniDeck's default 10 Hz publication rate.
 DISTANCE_TOLERANCE = 0.15
 STOP_ALLOWANCE_M = 0.12  # Observed ~0.10 m tail travel plus odometry sampling.
+TIMED_SPEED_MPS = 0.35  # Same input already verified to produce forward travel.
+TIMED_ESTIMATED_SPEED_MPS = 0.20  # Ground-speed estimate from the first timed run.
 
 
 def validate_motion_request(request):
     if not isinstance(request, dict) or request.get("operation") != "move_forward":
         raise ProbeError("unsupported_operation", "Only bounded forward movement is allowed")
+    if request.get("measurement_mode", "odometry") not in ("odometry", "timed"):
+        raise ProbeError("invalid_argument", "measurement_mode must be odometry or timed")
     for key, lower, upper in (("distance_m", 0.1, 2.0), ("timeout", 1, 120)):
         value = request.get(key)
         if (isinstance(value, bool) or not isinstance(value, (int, float))
@@ -48,6 +55,7 @@ def validate_motion_request(request):
 def motion_bootstrap(payload):
     try:
         validate_motion_request(payload["request"])
+        check_cancelled()
         environment = dict(os.environ)
         for key in ENV_KEYS:
             environment.pop(key, None)
@@ -61,17 +69,23 @@ def motion_bootstrap(payload):
         script += "n['motion_worker'](" + repr(payload["request"]) + "," + repr(payload["marker"]) + ")"
         os.execve(sys.executable, [sys.executable, "-B", "-u", "-c", script], environment)
     except Exception as error:
-        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": _error(error)})
+        failure = _error(error)
+        failure["details"].update(command_sent=False, retry_safe=False)
+        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": failure}, operation="move_forward")
 
 
 def execute_forward(request, session):
     """One attempt with unconditional bounded stop/release after locomotion starts."""
     validate_motion_request(request)
+    mode = request.get("measurement_mode", "odometry")
+    session.measurement_mode = mode
+    timed = mode == "timed"
     client_id = "app-omni-" + uuid.uuid4().hex[:24]
     authority_requested = control_acquired = command_sent = False
     origin = result = failure = None
     stopped = False
     try:
+        check_cancelled()
         session.prepare()
         session.require_idle()
         session.require_available()
@@ -88,59 +102,73 @@ def execute_forward(request, session):
         session.require_owned(client_id)
         command_sent = True  # Delivery may be ambiguous if the publisher raises.
         ack = session.start_locomotion(client_id)
-        origin = session.stationary_origin(client_id)
-        session.drive(request["distance_m"], client_id, origin)
+        if timed:
+            session.drive_timed(request["distance_m"], client_id)
+        else:
+            origin = session.stationary_origin(client_id)
+            session.drive(request["distance_m"], client_id, origin)
         result = {"robot_id": request["robot_id"], "action": "move_forward",
                   "target_distance_m": request["distance_m"], "executed": True,
-                  "command_sent": True, "completion": "measured_displacement",
-                  "bridge_ack": ack, "odometry_topic": ODOMETRY_TOPIC,
-                  "measurement": "SLAM tracking-point horizontal net displacement",
+                  "command_sent": True, "measurement_mode": mode,
+                  "completion": "estimated_time" if timed else "measured_displacement",
+                  "bridge_ack": ack,
+                  "measurement": ("Elapsed time at a fixed forward command; distance is not measured"
+                                  if timed else "SLAM tracking-point horizontal net displacement"),
                   "observed_at": utc_now(), "warnings": []}
+        if timed:
+            result.update(command_speed_mps=TIMED_SPEED_MPS,
+                          estimated_speed_mps=TIMED_ESTIMATED_SPEED_MPS,
+                          target_duration_sec=request["distance_m"] / TIMED_ESTIMATED_SPEED_MPS)
+            result["warnings"].append("Travel distance and physical stopping are not independently measured; stop feedback confirms downstream zero commands and healthy native locomotion only.")
     except Exception as error:
         failure = error if isinstance(error, ProbeError) else ProbeError(
             "motion_failed", "Forward movement failed; actual outcome is not confirmed",
             {"exception_type": type(error).__name__})
     finally:
-        if command_sent:
+        with begin_cleanup():
+            if command_sent:
+                try:
+                    stopped = session.stop(client_id) is True
+                except Exception:
+                    stopped = False
+            measured = None
+            if origin is not None:
+                try:
+                    measured = session.measured_distance(origin)
+                except Exception:
+                    pass
+            if result is not None and (not stopped or (not timed and (measured is None
+                                       or abs(measured - request["distance_m"]) > DISTANCE_TOLERANCE))):
+                failure = ProbeError("stop_unconfirmed" if not stopped else "distance_unconfirmed",
+                                     "Movement completion could not be confirmed")
+            released = False
+            if authority_requested:
+                try:
+                    released = session.release(client_id) is True
+                except Exception:
+                    pass
+            details = {"command_sent": command_sent, "stop_confirmed": stopped,
+                       "control_acquired": control_acquired,
+                       "authority_service": "/omni/control/authority",
+                       "authority_client_id": client_id,
+                       "authority_owner_type": 1 if control_acquired else None,
+                       "control_released": released, "actual_distance_m": measured,
+                       "target_distance_m": request["distance_m"], "measurement_mode": mode,
+                       "odometry_topic": None if timed else ODOMETRY_TOPIC}
+            if timed:
+                details["stop_feedback_scope"] = "downstream_command"
             try:
-                stopped = session.stop(client_id) is True
+                details["motion_diagnostics"] = session.diagnostics()
             except Exception:
-                stopped = False
-        measured = None
-        if origin is not None:
-            try:
-                measured = session.measured_distance(origin)
-            except Exception:
+                # Diagnostics must never prevent stop/release or conceal the cause.
                 pass
-        if result is not None and (not stopped or measured is None
-                                   or abs(measured - request["distance_m"]) > DISTANCE_TOLERANCE):
-            failure = ProbeError("stop_unconfirmed" if not stopped else "distance_unconfirmed",
-                                 "Movement completion could not be confirmed")
-        released = False
-        if authority_requested:
-            try:
-                released = session.release(client_id) is True
-            except Exception:
-                pass
-        details = {"command_sent": command_sent, "stop_confirmed": stopped,
-                   "control_acquired": control_acquired,
-                   "authority_service": "/omni/control/authority",
-                   "authority_client_id": client_id,
-                   "authority_owner_type": 1 if control_acquired else None,
-                   "control_released": released, "actual_distance_m": measured,
-                   "target_distance_m": request["distance_m"], "odometry_topic": ODOMETRY_TOPIC}
-        try:
-            details["motion_diagnostics"] = session.diagnostics()
-        except Exception:
-            # Diagnostics must never prevent stop/release or conceal the cause.
-            pass
-        if failure is not None:
-            failure.details.update(details)
-            failure.details["retry_safe"] = False
-        elif result is not None:
-            result.update(details)
-            if not released:
-                result["warnings"].append("Control release was not acknowledged; its bounded lease must expire.")
+            if failure is not None:
+                failure.details.update(details)
+                failure.details["retry_safe"] = False
+            elif result is not None:
+                result.update(details)
+                if not released:
+                    result["warnings"].append("Control release was not acknowledged; its bounded lease must expire.")
     if failure is not None:
         raise failure
     return result
@@ -148,9 +176,12 @@ def execute_forward(request, session):
 
 def motion_worker(request, marker):
     session = lock_file = None
+    handlers = None
     try:
         import fcntl
         validate_motion_request(request)
+        handlers = install_cancellation_handlers()
+        check_cancelled()
         lock_file = open("/tmp/omni-tools-posture.lock", "a")
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -161,9 +192,12 @@ def motion_worker(request, marker):
         signal.signal(signal.SIGALRM, timed_out)
         signal.setitimer(signal.ITIMER_REAL, request["timeout"] + 3.5)
         session = MotionSession(request["timeout"])
-        _emit(marker, {"ok": True, "data": execute_forward(request, session)})
+        _emit(marker, {"ok": True, "data": execute_forward(request, session)}, operation="move_forward")
     except Exception as error:
-        _emit(marker, {"ok": False, "error": _error(error)})
+        failure = _error(error)
+        if session is None:
+            failure["details"].setdefault("command_sent", False)
+        _emit(marker, {"ok": False, "error": failure}, operation="move_forward")
     finally:
         try:
             if session is not None:
@@ -172,6 +206,7 @@ def motion_worker(request, marker):
             if lock_file is not None:
                 lock_file.close()
             signal.setitimer(signal.ITIMER_REAL, 0)
+            restore_cancellation_handlers(handlers)
 
 
 def horizontal_distance(first, second):
@@ -207,6 +242,8 @@ def check_odometry(origin, previous, current):
 
 
 class MotionSession(PostureSession):
+    measurement_mode = "odometry"
+
     def __init__(self, timeout):
         super().__init__(timeout)
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -346,13 +383,15 @@ class MotionSession(PostureSession):
     def prepare(self):
         super().prepare()
         end = min(self.deadline, time.monotonic() + 4)
-        while (not self.odometry or self.native_locomotion is None or self.teleop.get_subscription_count() < 1
+        while ((self.measurement_mode == "odometry" and not self.odometry)
+               or self.native_locomotion is None or self.teleop.get_subscription_count() < 1
                or self.locomotion.get_subscription_count() < 1):
             if time.monotonic() >= end:
-                raise ProbeError("motion_unavailable", "Forward movement needs live odometry and Bridge subscribers")
+                raise ProbeError("motion_unavailable", "Forward movement feedback or Bridge subscribers are unavailable")
             self.require_idle()
             self.spin()
-        self._fresh_odometry()
+        if self.measurement_mode == "odometry":
+            self._fresh_odometry()
         self._fresh_locomotion()
 
     def _maintain(self, client_id):
@@ -377,8 +416,10 @@ class MotionSession(PostureSession):
         finally:
             self.deadline = previous_deadline
 
-    def cycle(self):
+    def cycle(self, until=None):
         end = min(self.deadline, time.monotonic() + CONTROL_PERIOD)
+        if until is not None:
+            end = min(end, until)
         while time.monotonic() < end:
             self.rclpy.spin_once(self.node, timeout_sec=max(0.0, min(self.remaining(), end - time.monotonic())))
 
@@ -395,7 +436,8 @@ class MotionSession(PostureSession):
         end = min(self.deadline, time.monotonic() + 5)
         while True:
             self._maintain(client_id)
-            self._fresh_odometry()
+            if self.measurement_mode == "odometry":
+                self._fresh_odometry()
             status = self._fresh_locomotion()
             if self.loco_ack is not None and self.loco_ack != "success:loco":
                 raise ProbeError("locomotion_rejected", "Bridge rejected locomotion entry", {"bridge_ack": self.loco_ack})
@@ -453,6 +495,7 @@ class MotionSession(PostureSession):
         best = 0.0
         progressed_at = time.monotonic()
         while True:
+            check_cancelled()
             self._maintain(client_id)
             self.require_locomotion_ready()
             current = self._fresh_odometry()
@@ -478,8 +521,24 @@ class MotionSession(PostureSession):
             raise ProbeError("odometry_frame_changed", "Final odometry frame differs from the origin")
         return round(horizontal_distance(origin, current), 4)
 
+    def drive_timed(self, distance, client_id):
+        end = time.monotonic() + distance / TIMED_ESTIMATED_SPEED_MPS
+        previous_deadline = self.deadline
+        self.deadline = min(self.deadline, end)
+        try:
+            while time.monotonic() < end:
+                check_cancelled()
+                self._maintain(client_id)
+                self.require_locomotion_ready()
+                if time.monotonic() >= end:
+                    break
+                self.publish_velocity(client_id, TIMED_SPEED_MPS)
+                self.cycle(until=end)
+        finally:
+            self.deadline = previous_deadline
+
     def stop(self, client_id):
-        """Repeat zero commands and require fresh downstream zero plus settled odometry."""
+        """Require downstream zero; measured mode additionally requires settled odometry."""
         previous_deadline = self.deadline
         start = time.monotonic()
         self.deadline = start + 2
@@ -490,11 +549,15 @@ class MotionSession(PostureSession):
                 self._maintain(client_id)
                 self.cycle()
                 try:
-                    self._fresh_odometry()
+                    if self.measurement_mode == "timed":
+                        self.require_locomotion_ready()
+                        samples = True
+                    else:
+                        self._fresh_odometry()
+                        samples = self._stable(self.odometry, max(start, time.monotonic() - 0.75), 0.4, 0.015)
                 except ProbeError as error:
                     self.stop_feedback["reason"] = error.code
                     continue
-                samples = self._stable(self.odometry, max(start, time.monotonic() - 0.75), 0.4, 0.015)
                 self.stop_feedback["reason"] = "odometry_unstable" if not samples else "downstream_zero_unconfirmed"
                 if (time.monotonic() - start >= 0.6 and samples and self.velocity is not None
                         and self.velocity_received >= start

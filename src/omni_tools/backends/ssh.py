@@ -46,14 +46,29 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class SSHBackend:
+    transport_name = "SSH"
+    transport_error_code = "ssh_failed"
+    unavailable_code = "ssh_unavailable"
+
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def _command(self, bootstrap):
+        import shlex
+        return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+                "-o", "UpdateHostKeys=no", "-o", f"ConnectTimeout={self.settings.ssh_connect_timeout}",
+                "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
+                self.settings.ssh_host, "python3 -B -u -c " + shlex.quote(bootstrap)]
+
+    def _execute(self, command, payload):
+        return subprocess.run(command, input=payload, text=True, capture_output=True,
+                              timeout=self.settings.timeout + self.settings.ssh_connect_timeout + 3)
+
     def _run(self, operation: str, robot_id: str, task_id: str | None = None,
              *, posture: str | None = None, distance_m: float | None = None,
-             runtime_fields: dict | None = None) -> dict:
+             measurement_mode: str = "odometry", runtime_fields: dict | None = None) -> dict:
         if robot_id != self.settings.robot_id:
-            raise OmniError("robot_not_configured", "Robot does not match this SSH configuration")
+            raise OmniError("robot_not_configured", f"Robot does not match this {self.transport_name} configuration")
         if task_id is not None and (
             not isinstance(task_id, str) or not task_id or len(task_id) > 256
             or any(ord(c) < 32 for c in task_id)
@@ -78,10 +93,14 @@ class SSHBackend:
         elif operation == "move_forward":
             from ..policy import require_motion_write
             require_motion_write(self.settings, robot_id)
+            if type(measurement_mode) is not str or measurement_mode not in {"odometry", "timed"}:
+                raise OmniError("invalid_argument", "measurement_mode must be odometry or timed")
             if (type(distance_m) not in {int, float} or not 0.1 <= distance_m <= 2.0
                     or not math.isfinite(distance_m)):
                 raise OmniError("invalid_argument", "Forward distance must be a finite number from 0.1 to 2 meters")
             request["distance_m"] = float(distance_m)
+            if measurement_mode != "odometry":
+                request["measurement_mode"] = measurement_mode
             body["probe_source"] = source
             body["posture_source"] = source_root.joinpath("remote_posture.py").read_text()
             body["source"] = source_root.joinpath("remote_motion.py").read_text()
@@ -102,12 +121,7 @@ class SSHBackend:
         payload = json.dumps(body, allow_nan=False)
         # OpenSSH concatenates remote arguments through a shell. This command is
         # entirely constant: all user values travel as JSON on stdin instead.
-        import shlex
-        command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
-                   "-o", "UpdateHostKeys=no",
-                   "-o", f"ConnectTimeout={self.settings.ssh_connect_timeout}",
-                   "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
-                   self.settings.ssh_host, "python3 -B -u -c " + shlex.quote(bootstrap)]
+        command = self._command(bootstrap)
         def transport_error(code, message, details=None):
             facts = dict(details or {})
             if operation == "set_posture":
@@ -126,14 +140,13 @@ class SSHBackend:
                 message = "Runtime transport outcome is unknown; query current status before another request"
             return OmniError(code, message, facts)
         try:
-            result = subprocess.run(command, input=payload, text=True, capture_output=True,
-                                    timeout=self.settings.timeout + self.settings.ssh_connect_timeout + 3)
+            result = self._execute(command, payload)
         except FileNotFoundError:
-            raise OmniError("ssh_unavailable", "The SSH executable is unavailable") from None
+            raise OmniError(self.unavailable_code, f"The {self.transport_name} executable is unavailable") from None
         except subprocess.TimeoutExpired:
-            raise transport_error("timeout", "SSH robot query exceeded its time limit") from None
+            raise transport_error("timeout", "Robot query exceeded its time limit") from None
         except OSError:
-            raise transport_error("ssh_failed", "Unable to start the SSH robot query") from None
+            raise transport_error(self.transport_error_code, f"Unable to start the {self.transport_name} robot query") from None
         # Do not return arbitrary stderr: SSH banners and runtime logs may
         # contain deployment details or credentials. Only accept our nonce line.
         if len(result.stdout.encode("utf-8")) > _MAX_RESPONSE_BYTES:
@@ -141,7 +154,7 @@ class SSHBackend:
         lines = [line[len(marker):] for line in result.stdout.splitlines() if line.startswith(marker)]
         if len(lines) != 1:
             if result.returncode == 255:
-                raise transport_error("ssh_failed", "SSH connection or authentication failed; check the host configuration")
+                raise transport_error(self.transport_error_code, f"{self.transport_name} connection or authentication failed; check configuration")
             raise transport_error("invalid_robot_response", "Robot returned no unique structured query response",
                             {"exit_code": result.returncode})
         try:
@@ -177,8 +190,8 @@ class SSHBackend:
     def set_posture(self, posture: str, robot_id: str) -> dict:
         return self._run("set_posture", robot_id, posture=posture)
 
-    def move_forward(self, distance_m: float, robot_id: str) -> dict:
-        return self._run("move_forward", robot_id, distance_m=distance_m)
+    def move_forward(self, distance_m: float, robot_id: str, measurement_mode: str = "odometry") -> dict:
+        return self._run("move_forward", robot_id, distance_m=distance_m, measurement_mode=measurement_mode)
 
     def start_localization(self, map_id, map_version, map_checksum,
                            initial_x, initial_y, initial_z, initial_yaw, robot_id):

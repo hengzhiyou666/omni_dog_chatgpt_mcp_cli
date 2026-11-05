@@ -16,7 +16,9 @@ import uuid
 # When streamed, the read probe is compiled first in the same namespace.
 if globals().get("__package__"):
     from .remote_probe import (ENV_KEYS, ProbeError, _emit, _error,
-                               runtime_environment, sanitize, utc_now)
+                               runtime_environment, sanitize, utc_now, begin_cleanup,
+                               check_cancelled, install_cancellation_handlers,
+                               restore_cancellation_handlers)
 
 
 POSTURES = frozenset({"stand", "lie_down"})
@@ -48,6 +50,7 @@ def posture_bootstrap(payload):
     """Set the live runtime's library paths before importing ROS Python."""
     try:
         validate_posture_request(payload["request"])
+        check_cancelled()
         environment = dict(os.environ)
         for key in ENV_KEYS:
             environment.pop(key, None)
@@ -63,7 +66,9 @@ def posture_bootstrap(payload):
         )
         os.execve(sys.executable, [sys.executable, "-B", "-u", "-c", script], environment)
     except Exception as error:
-        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": _error(error)})
+        failure = _error(error)
+        failure["details"].update(command_sent=False, retry_safe=False)
+        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": failure}, operation="set_posture")
 
 
 def execute_posture(request, session):
@@ -76,6 +81,7 @@ def execute_posture(request, session):
     result = None
     failure = None
     try:
+        check_cancelled()
         session.prepare()
         session.require_idle()
         session.require_available()
@@ -113,17 +119,18 @@ def execute_posture(request, session):
                 error.details.setdefault("physical_posture_confirmed", False)
                 error.details.setdefault("retry_safe", False)
     finally:
-        if authority_requested:
-            try:
-                released = session.release(client_id)
-            except Exception:
-                released = False
-            if result is not None:
-                result["control_released"] = bool(released)
-                if not released:
-                    result["warnings"].append("Control release was not acknowledged; its bounded lease must expire.")
-            elif isinstance(failure, ProbeError):
-                failure.details["control_released"] = bool(released)
+        with begin_cleanup():
+            if authority_requested:
+                try:
+                    released = session.release(client_id)
+                except Exception:
+                    released = False
+                if result is not None:
+                    result["control_released"] = bool(released)
+                    if not released:
+                        result["warnings"].append("Control release was not acknowledged; its bounded lease must expire.")
+                elif isinstance(failure, ProbeError):
+                    failure.details["control_released"] = bool(released)
     if failure is not None:
         raise failure
     return result
@@ -132,9 +139,12 @@ def execute_posture(request, session):
 def posture_worker(request, marker):
     session = None
     lock_file = None
+    handlers = None
     try:
         import fcntl
         validate_posture_request(request)
+        handlers = install_cancellation_handlers()
+        check_cancelled()
         lock_file = open("/tmp/omni-tools-posture.lock", "a")
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -146,9 +156,12 @@ def posture_worker(request, marker):
         signal.setitimer(signal.ITIMER_REAL, request["timeout"] + 3)
         session = PostureSession(request["timeout"])
         data = execute_posture(request, session)
-        _emit(marker, {"ok": True, "data": data})
+        _emit(marker, {"ok": True, "data": data}, operation="set_posture")
     except Exception as error:
-        _emit(marker, {"ok": False, "error": _error(error)})
+        failure = _error(error)
+        if session is None:
+            failure["details"].setdefault("command_sent", False)
+        _emit(marker, {"ok": False, "error": failure}, operation="set_posture")
     finally:
         try:
             if session is not None:
@@ -157,6 +170,7 @@ def posture_worker(request, marker):
             if lock_file is not None:
                 lock_file.close()
             signal.setitimer(signal.ITIMER_REAL, 0)
+            restore_cancellation_handlers(handlers)
 
 
 class PostureSession:
@@ -166,6 +180,7 @@ class PostureSession:
         try:
             import rclpy
             from rclpy.node import Node
+            from rclpy.signals import SignalHandlerOptions
             from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
             from rosidl_runtime_py.convert import message_to_ordereddict
             from rosidl_runtime_py.utilities import get_message, get_service
@@ -180,7 +195,8 @@ class PostureSession:
         self.sent = False
         self.command = None
         self.subscriptions = []
-        rclpy.init(args=["--ros-args", "--disable-external-lib-logs", "--disable-rosout-logs", "--disable-stdout-logs"])
+        rclpy.init(args=["--ros-args", "--disable-external-lib-logs", "--disable-rosout-logs", "--disable-stdout-logs"],
+                   signal_handler_options=SignalHandlerOptions.NO)
         self.node = Node("omni_tools_posture_" + str(os.getpid()), enable_rosout=False,
                          start_parameter_services=False, use_global_arguments=False)
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -197,6 +213,7 @@ class PostureSession:
         self.client = self.node.create_client(self.authority_type, AUTHORITY_SERVICE)
 
     def remaining(self):
+        check_cancelled()
         value = self.deadline - time.monotonic()
         if value <= 0:
             raise ProbeError("timeout", "Posture acknowledgement timed out", {"retry_safe": False})
@@ -268,6 +285,7 @@ class PostureSession:
             self.spin()
 
     def publish_once(self, command, client_id):
+        check_cancelled()
         if self.sent:
             raise ProbeError("action_in_progress", "Posture command has already been sent")
         self.command = command
@@ -287,6 +305,7 @@ class PostureSession:
     def wait_ack(self, command, client_id):
         renew_at = time.monotonic() + 1
         while True:
+            check_cancelled()
             self.require_idle()
             self.require_owned(client_id)
             if self.ack is not None:

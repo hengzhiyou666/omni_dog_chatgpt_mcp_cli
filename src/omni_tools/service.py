@@ -16,6 +16,9 @@ class OmniService:
             if settings.backend == "ssh":
                 from .backends.ssh import SSHBackend
                 backend = SSHBackend(settings)
+            elif settings.backend == "local":
+                from .backends.local import LocalBackend
+                backend = LocalBackend(settings)
             else:
                 from .backends.http import HTTPBackend
                 backend = HTTPBackend(settings)
@@ -82,9 +85,9 @@ class OmniService:
         if not execute:
             data = {"operation": operation, "executed": False, "preview": True,
                     "parameters": {"robot_id": robot, "posture": posture},
-                    "execution_backend": "ssh",
-                    "current_backend_supports_execution": self.settings.backend == "ssh",
-                    "execution_requirements": ["SSH backend", "OMNI_ALLOW_WRITES=1",
+                    "execution_backend": "local" if self.settings.backend == "local" else "ssh",
+                    "current_backend_supports_execution": self.settings.backend in {"ssh", "local"},
+                    "execution_requirements": ["SSH or local ROS backend", "OMNI_ALLOW_WRITES=1",
                                                "robot in OMNI_ALLOWED_ROBOTS", "execute=true",
                                                "idle robot with exclusive APP control authority"],
                     "physical_posture_confirmed": False}
@@ -106,11 +109,13 @@ class OmniService:
         return self._posture("lie_down", "lie_down", robot_id, execute)
 
     def move_forward(self, distance_m: float = 1.0, robot_id: str | None = None,
-                     execute: bool = False) -> dict:
-        """Move body-forward by bounded relative odometry distance, then stop."""
+                     execute: bool = False, measurement_mode: str = "odometry") -> dict:
+        """Move body-forward using odometry, or explicitly estimate travel by time."""
         robot = identifier(self.settings.robot_id if robot_id is None else robot_id, "robot_id")
         if type(execute) is not bool:
             raise OmniError("invalid_argument", "execute must be a boolean")
+        if type(measurement_mode) is not str or measurement_mode not in {"odometry", "timed"}:
+            raise OmniError("invalid_argument", "measurement_mode must be odometry or timed")
         try:
             valid = type(distance_m) in {int, float} and math.isfinite(distance_m) and 0.1 <= distance_m <= 2.0
         except (OverflowError, ValueError):
@@ -120,17 +125,24 @@ class OmniService:
         distance_m = float(distance_m)
         if not execute:
             data = {"operation": "move_forward", "executed": False, "preview": True,
-                    "parameters": {"robot_id": robot, "distance_m": distance_m},
-                    "execution_backend": "ssh",
-                    "current_backend_supports_execution": self.settings.backend == "ssh",
-                    "execution_requirements": ["SSH backend", "OMNI_ALLOW_WRITES=1",
+                    "parameters": {"robot_id": robot, "distance_m": distance_m,
+                                   "measurement_mode": measurement_mode},
+                    "execution_backend": "local" if self.settings.backend == "local" else "ssh",
+                    "current_backend_supports_execution": self.settings.backend in {"ssh", "local"},
+                    "execution_requirements": ["SSH or local ROS backend", "OMNI_ALLOW_WRITES=1",
                                                "robot in OMNI_ALLOWED_ROBOTS", "execute=true",
                                                "standing idle robot with exclusive APP authority",
-                                               "fresh continuous robot odometry"],
-                    "completion_note": "Robot-side feedback controls distance and confirms stopping; the model does not stream velocities."}
+                                               "fresh continuous robot odometry" if measurement_mode == "odometry"
+                                               else "fresh native locomotion and downstream velocity feedback"],
+                    "completion_note": (
+                        "Robot-side feedback controls distance and confirms stopping; the model does not stream velocities."
+                        if measurement_mode == "odometry" else
+                        "Timed movement holds the 0.35 forward command for distance/0.20 seconds using dog4's estimated travel speed, without SLAM. Actual distance is not measured; stopping confirms downstream zero commands, not independent physical stillness.")}
         else:
             require_motion_write(self.settings, robot)
-            data = {**self.backend.move_forward(distance_m, robot),
+            result = (self.backend.move_forward(distance_m, robot) if measurement_mode == "odometry"
+                      else self.backend.move_forward(distance_m, robot, measurement_mode))
+            data = {**result, "measurement_mode": measurement_mode,
                     "operation": "move_forward", "executed": True, "preview": False}
         return sanitize({"ok": True, "backend": self.settings.backend, "robot_id": robot,
                          "observed_at": datetime.now(timezone.utc).isoformat(), "data": data})
@@ -154,9 +166,10 @@ class OmniService:
             raise OmniError("invalid_argument", "execute must be a boolean")
         if not execute:
             data = {"operation": operation, "executed": False, "preview": True,
-                    "parameters": {"robot_id": robot, **parameters}, "execution_backend": "ssh",
-                    "current_backend_supports_execution": self.settings.backend == "ssh",
-                    "execution_requirements": ["SSH backend", "OMNI_ALLOW_WRITES=1",
+                    "parameters": {"robot_id": robot, **parameters},
+                    "execution_backend": "local" if self.settings.backend == "local" else "ssh",
+                    "current_backend_supports_execution": self.settings.backend in {"ssh", "local"},
+                    "execution_requirements": ["SSH or local ROS backend", "OMNI_ALLOW_WRITES=1",
                                                "robot in OMNI_ALLOWED_ROBOTS", "execute=true"]}
         else:
             require_runtime_write(self.settings, robot)
