@@ -34,6 +34,10 @@ TOPICS = {
     "slam_status": ("/omni/slam/status", "omni_tf_manager/msg/SlamStatus"),
     "control_authority_status": ("/omni/control/authority/status", "omni_robot_interfaces/msg/ControlAuthorityStatus"),
 }
+LOCALIZATION_TOPICS = {
+    "tf_ready_status": ("/omni/tf_manager/ready", "std_msgs/msg/Bool"),
+    "body_odom_global": ("/omni/tf_manager/body_odom_global", "nav_msgs/msg/Odometry"),
+}
 READ_SERVICES = {
     "list_maps": ("/omni/maps/list", "omni_robot_interfaces/srv/ListMaps"),
     "list_routes": ("/omni/routes/list", "omni_robot_interfaces/srv/ListRoutes"),
@@ -199,9 +203,11 @@ class RosReader:
         # sample as proof of a live process. BEST_EFFORT accepts either publisher.
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                          durability=DurabilityPolicy.VOLATILE)
+        ready_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL)
         samples, observations, subscriptions = {}, {}, []
         for key in keys:
-            topic, type_name = TOPICS[key]
+            topic, type_name = (TOPICS | LOCALIZATION_TOPICS)[key]
             observations[key] = {"topic": topic, "available": False}
             try:
                 message_type = self.get_message(type_name)
@@ -209,7 +215,12 @@ class RosReader:
                     samples[key] = sanitize(self.convert(message))
                     observations[key].update(available=True, received_at=utc_now(),
                                              _received_monotonic=time.monotonic())
-                subscriptions.append(self.node.create_subscription(message_type, topic, callback, qos))
+                # TF ready publishes only on change. Its retained Bool must be
+                # interpreted together with the freshly stamped odometry.
+                retained = key == "tf_ready_status"
+                observations[key]["may_be_retained"] = retained
+                subscriptions.append(self.node.create_subscription(
+                    message_type, topic, callback, ready_qos if retained else qos))
             except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
                 observations[key]["reason"] = "message_type_unavailable"
         sample_deadline = min(self.deadline, time.monotonic() + 4.0)
@@ -306,13 +317,13 @@ def perform(request, reader):
                 "count": len(results), "mission_existence": "confirmed_by_evidence" if results else "unknown",
                 "warnings": [] if results else ["No evidence records were returned. This does not establish whether the mission exists or has completed."]}
     if operation == "get_robot_status":
-        samples, observations = reader.topics(tuple(TOPICS))
-        if not samples:
+        samples, observations = reader.topics(tuple(TOPICS) + tuple(LOCALIZATION_TOPICS))
+        if not any(key in samples for key in TOPICS):
             raise ProbeError("status_unavailable", "No live robot status topics were observed",
                              {"runtime_process_found": True, "observations": observations})
-        return {**base, **{key: samples.get(key) for key in TOPICS}, "observations": observations,
+        return {**base, **{key: samples.get(key) for key in TOPICS | LOCALIZATION_TOPICS}, "observations": observations,
                 "runtime_process_found": True,
-                "complete": all(item["available"] for item in observations.values())}
+                "complete": all(observations.get(key, {}).get("available", False) for key in TOPICS)}
     if operation == "get_task":
         samples, observations = reader.topics(("mission_status", "navigation_status", "runtime_status"))
         task_id = request["task_id"]

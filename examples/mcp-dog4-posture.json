@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "omni-dog4": {
+      "command": "/home/hzy/20260914_omni/omni_dog_chatgpt_mcp_cli/.venv/bin/omni-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "OMNI_BACKEND": "ssh",
+        "OMNI_SSH_HOST": "dog4",
+        "OMNI_ROBOT_ID": "dog4",
+        "OMNI_TIMEOUT": "30",
+        "OMNI_ALLOW_WRITES": "1",
+        "OMNI_ALLOWED_ROBOTS": "dog4"
+      }
+    }
+  }
+}

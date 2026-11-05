@@ -85,6 +85,53 @@ def create_server(settings: Settings | None = None, *, service=None, port: int =
         """Preview task cancellation. Execution changes robot task state; confirmation requires a later get_task query."""
         return await call("cancel_task", task_id, robot_id, kind, execute)
 
+    @server.tool(annotations=writes)
+    async def stand_up(robot_id: str | None = None,
+                       execute: StrictBool = False) -> CallToolResult:
+        """站立/起立/站起来：preview standing up. execute=true changes robot posture and requires configured write permission."""
+        return await call("stand_up", robot_id, execute)
+
+    @server.tool(annotations=writes)
+    async def lie_down(robot_id: str | None = None,
+                       execute: StrictBool = False) -> CallToolResult:
+        """坐下/卧下/趴下均执行卧下：preview lying down, not a sitting pose. execute=true requires configured write permission."""
+        return await call("lie_down", robot_id, execute)
+
+    @server.tool(annotations=writes)
+    async def move_forward(distance_m: StrictFloat = 1.0, robot_id: str | None = None,
+                           execute: StrictBool = False) -> CallToolResult:
+        """向前：preview a body-forward move of 0.1..2 meters (default 1). Execution uses robot-side distance feedback and stops if feedback is lost; execute=true requires configured write permission."""
+        return await call("move_forward", distance_m, robot_id, execute)
+
+    @server.tool(annotations=writes)
+    async def start_localization(map_id: str, map_version: StrictInt, map_checksum: str,
+                                 initial_x: StrictFloat = 0.0, initial_y: StrictFloat = 0.0,
+                                 initial_z: StrictFloat = 0.0, initial_yaw: StrictFloat = 0.0,
+                                 robot_id: str | None = None, execute: StrictBool = False) -> CallToolResult:
+        """Load the exact map and wait for localization READY with fresh pose/TF; preview by default."""
+        return await call("start_localization", map_id, map_version, map_checksum,
+                          initial_x, initial_y, initial_z, initial_yaw, robot_id, execute)
+
+    @server.tool(annotations=writes)
+    async def start_route_recording(route_id: str, map_id: str, map_version: StrictInt, map_checksum: str,
+                                    initial_x: StrictFloat = 0.0, initial_y: StrictFloat = 0.0,
+                                    initial_z: StrictFloat = 0.0, initial_yaw: StrictFloat = 0.0,
+                                    robot_id: str | None = None, execute: StrictBool = False) -> CallToolResult:
+        """Start recording on the exact map and wait for READY; return recording_operation_id for save/discard."""
+        return await call("start_route_recording", route_id, map_id, map_version, map_checksum,
+                          initial_x, initial_y, initial_z, initial_yaw, robot_id, execute)
+
+    @server.tool(annotations=writes)
+    async def finish_route_recording(recording_operation_id: str, disposition: Literal["save", "discard"],
+                                     robot_id: str | None = None, execute: StrictBool = False) -> CallToolResult:
+        """Save or discard only the specified recording, waiting for completion; preview by default."""
+        return await call("finish_route_recording", recording_operation_id, disposition, robot_id, execute)
+
+    @server.tool(annotations=writes)
+    async def set_runtime_idle(robot_id: str | None = None, execute: StrictBool = False) -> CallToolResult:
+        """Stop localization/recover idle and wait for IDLE; refuses unfinished mapping/recording or active missions."""
+        return await call("set_runtime_idle", robot_id, execute)
+
     return server
 
 

@@ -15,7 +15,7 @@ class Parser(argparse.ArgumentParser):
 
 
 def build_parser():
-    parser = Parser(prog="omni", description="Omni robot queries via SSH or the inspection HTTP API")
+    parser = Parser(prog="omni", description="Omni robot queries and preview-first controls via SSH or HTTP")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--backend", choices=["ssh", "http"], default=None)
     parser.add_argument("--ssh-host", default=None)
@@ -61,6 +61,72 @@ def build_parser():
     cancel.add_argument("--robot", default=None)
     cancel.add_argument("--kind", choices=["inspection", "navigation"], default="inspection")
     cancel.add_argument("--execute", action="store_true")
+
+    def posture_options(cmd, method):
+        cmd.set_defaults(posture_method=method)
+        cmd.add_argument("--robot", default=None)
+        cmd.add_argument("--execute", action="store_true",
+                         help="Execute the posture change with configured write permission; otherwise preview")
+
+    for name, method, help_text in [
+        ("stand", "stand_up", "Preview standing up (站立/起立/站起来)"),
+        ("lie", "lie_down", "Preview lying down (坐下/卧下/趴下 all mean lie down)"),
+    ]:
+        posture_options(command("posture", name, help_text), method)
+
+    for name, method in [
+        ("站立", "stand_up"), ("起立", "stand_up"), ("站起来", "stand_up"),
+        ("坐下", "lie_down"), ("卧下", "lie_down"), ("趴下", "lie_down"),
+    ]:
+        alias = groups.add_parser(name, help="Preview standing up" if method == "stand_up" else "Preview lying down")
+        alias.add_argument("--json", action="store_true", help="Emit compact machine-readable JSON")
+        posture_options(alias, method)
+
+    def forward_options(cmd):
+        cmd.set_defaults(motion_method="move_forward")
+        cmd.add_argument("--distance", dest="distance_m", type=float, default=1.0,
+                         help="Body-forward distance in meters, 0.1..2 (default: 1)")
+        cmd.add_argument("--robot", default=None)
+        cmd.add_argument("--execute", action="store_true",
+                         help="Execute with robot-side feedback and configured write permission; otherwise preview")
+
+    forward_options(command("motion", "forward", "Preview a body-forward move using robot-side feedback"))
+    forward_alias = groups.add_parser("向前", help="Preview moving forward (default: 1 meter)")
+    forward_alias.add_argument("--json", action="store_true", help="Emit compact machine-readable JSON")
+    forward_options(forward_alias)
+
+    map_fields = ("map_id", "map_version", "map_checksum", "initial_x", "initial_y", "initial_z", "initial_yaw")
+
+    def runtime_options(cmd, method, fields=()):
+        cmd.set_defaults(runtime_method=method, runtime_fields=fields)
+        cmd.add_argument("--robot", default=None)
+        cmd.add_argument("--execute", action="store_true", help="Execute and wait for the runtime result; otherwise preview")
+
+    def map_options(cmd):
+        cmd.add_argument("--map", dest="map_id", required=True)
+        cmd.add_argument("--map-version", type=int, required=True)
+        cmd.add_argument("--map-checksum", required=True)
+        for field in ("initial_x", "initial_y", "initial_z", "initial_yaw"):
+            cmd.add_argument("--" + field.replace("_", "-"), type=float, default=0.0)
+
+    localization = command("localization", "start", "Load the named map and wait for localization READY")
+    map_options(localization)
+    runtime_options(localization, "start_localization", map_fields)
+    runtime_options(command("runtime", "idle", "Return to idle without discarding unfinished work"), "set_runtime_idle")
+
+    record = commands["routes"].add_parser("record", help="Start, save or discard route recording")
+    recording = record.add_subparsers(dest="record_command", required=True)
+    for action in ("start", "save", "discard"):
+        cmd = recording.add_parser(action)
+        cmd.add_argument("--json", action="store_true", help="Emit compact machine-readable JSON")
+        if action == "start":
+            cmd.add_argument("--route", dest="route_id", required=True)
+            map_options(cmd)
+            runtime_options(cmd, "start_route_recording", ("route_id", *map_fields))
+        else:
+            cmd.add_argument("--operation", dest="recording_operation_id", required=True)
+            cmd.set_defaults(disposition=action)
+            runtime_options(cmd, "finish_route_recording", ("recording_operation_id", "disposition"))
     return parser
 
 
@@ -70,7 +136,14 @@ def run(argv=None, *, service=None):
         args = build_parser().parse_args(argv)
         service = service or OmniService(Settings.from_env(
             backend=args.backend, ssh_host=args.ssh_host, timeout=args.timeout))
-        if args.group == "robot":
+        if getattr(args, "runtime_method", None):
+            fields = {field: getattr(args, field) for field in args.runtime_fields}
+            result = getattr(service, args.runtime_method)(**fields, robot_id=args.robot, execute=args.execute)
+        elif getattr(args, "posture_method", None):
+            result = getattr(service, args.posture_method)(args.robot, args.execute)
+        elif getattr(args, "motion_method", None):
+            result = service.move_forward(args.distance_m, args.robot, args.execute)
+        elif args.group == "robot":
             result = service.get_robot_status(args.robot_id)
         elif args.group == "maps":
             result = service.list_maps(args.robot)
