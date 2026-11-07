@@ -5,7 +5,7 @@
 
 ## 当前能力
 
-第一版 [`v0.1.0`](https://github.com/hengzhiyou666/omni_mcp_cli/tree/v0.1.0) 提供下面五项查询，已完成 dog4 只读验证。第二版 `0.2.0` 增加默认预览的任务操作接口；第三版 `0.3.0` 增加通过 SSH 执行的站立、卧下和定距前进接口。当前工作区再增加四项定位与录线操作，共 15 个 MCP 工具（5 个查询、10 个操作）。实机验证范围见[验证记录](docs/VALIDATION.md)。
+第一版 [`v0.1.0`](https://github.com/hengzhiyou666/omni_mcp_cli/tree/v0.1.0) 提供下面五项查询，已完成 dog4 只读验证。第二版 `0.2.0` 增加默认预览的任务操作接口；第三版 `0.3.0` 增加通过 SSH 执行的站立、卧下和定距前进接口。当前工作区再增加四项定位与录线、四方向移动和旋转操作，共 17 个 MCP 工具（5 个查询、12 个操作）。实机验证范围见[验证记录](docs/VALIDATION.md)。
 
 | MCP 工具 | CLI | 功能 |
 |---|---|---|
@@ -25,6 +25,8 @@
 | `stand_up` | `omni posture stand --robot dog4 --json` | 预览站立；SSH 执行时等待 Bridge 回包 |
 | `lie_down` | `omni posture lie --robot dog4 --json` | 预览卧下；SSH 执行时等待 Bridge 回包 |
 | `move_forward` | `omni motion forward --distance 1 --robot dog4 --json` | 预览机体向前定距运动；默认 1 米，可设 0.1–2.0 米 |
+| `move` | `omni motion move --direction left --distance 0.2 --robot dog4 --json` | 预览机体前后左右移动；0.1–2.0 米，定时估算 |
+| `rotate` | `omni motion rotate --angle 15 --direction clockwise --robot dog4 --json` | 预览原地旋转；1–360 度，默认顺时针，定时估算 |
 | `start_localization` | `omni localization start ...` | 加载指定地图，等待定位、TF 与新鲜里程计就绪 |
 | `start_route_recording` | `omni routes record start ...` | 开始录线，返回录制操作编号 |
 | `finish_route_recording` | `omni routes record save/discard --operation <录制操作编号>` | 保存或丢弃指定录制会话 |
@@ -79,7 +81,7 @@ export OMNI_ALLOW_WRITES=0
 /userdata/1_heng/omni_mcp_cli/.venv/bin/omni robot status --json
 ```
 
-真实动作仍需 `OMNI_ALLOW_WRITES=1`、`OMNI_ALLOWED_ROBOTS=dog4` 和本次 `--execute`／`execute=true`。local 支持五项查询、姿态、前进和四项定位录线操作；巡检启动、到点导航、取消任务的执行仍要求 HTTP 后端。狗端 MCP 配置见 [mcp-local.json](examples/mcp-local.json)。
+真实动作仍需 `OMNI_ALLOW_WRITES=1`、`OMNI_ALLOWED_ROBOTS=dog4` 和本次 `--execute`／`execute=true`。local 支持五项查询、姿态、四方向移动、旋转和四项定位录线操作；巡检启动、到点导航、取消任务的执行仍要求 HTTP 后端。狗端 MCP 配置见 [mcp-local.json](examples/mcp-local.json)。
 
 任务运行器可设置每任务独立的绝对路径 `OMNI_CANCEL_FILE`，其父目录必须存在且可写。取消时先创建该标记；动作入口与执行循环检查它，前进会走原有零速、停车确认和租约释放流程。任何动作失败也会创建标记，阻止该任务后续动作，查询仍可使用。local worker 以独立进程组运行，父进程退出触发协作取消；超时先请求清理并等待5秒，无法确认的结果明确返回未知。
 
@@ -162,6 +164,20 @@ Bridge 返回成功表示厂商动作接口已应答，**不能据此确认机�
 默认 `odometry` 保持上述测距检查。`timed` 保持 0.35 的前进指令，按 dog4 现场估计地面速度 0.20 m/s 计算 `distance_m/0.20` 秒（1米为5秒），不要求 SLAM；控制权、原生运动状态、超时、取消和释放检查仍保留。结果 `completion="estimated_time"`、`actual_distance_m=null`；停车仅确认新鲜的下游零速度指令，`stop_feedback_scope="downstream_command"`，不代表独立测得机体静止或实际移动距离。
 
 此接口的真机结果以[验证记录](docs/VALIDATION.md)为准。
+
+## 四方向移动与旋转
+
+`move(direction, distance_m=1.0, robot_id=None, execute=False)` 支持 `forward`、`backward`、`left`、`right`，方向相对于机体，横移保持朝向。`rotate(angle_deg=90.0, direction="clockwise", robot_id=None, execute=False)` 支持 `clockwise`／`counterclockwise`，从上方看默认顺时针。旧 `move_forward` 保持兼容。
+
+```bash
+# 均为离线预览；确认后加 --execute 执行
+omni --timeout 60 motion move --direction backward --distance 0.2 --json
+omni --timeout 60 motion move --direction left --distance 0.2 --json
+omni --timeout 60 motion rotate --angle 15 --json
+omni --timeout 60 motion rotate --angle 15 --direction counterclockwise --json
+```
+
+新接口只使用定时估算，复用原有控制权、续租、取消、零速确认和释放流程。前进沿用已有标定；后退、横移和转速尚需实机标定，结果 `actual_distance_m`／`actual_angle_deg` 为 `null`，距离、角度均为近似值。动作时长必须能放入指定超时，否则在发送非零速度前拒绝执行。
 
 ## 连接巡检后台：HTTP 适配器
 

@@ -97,6 +97,21 @@ def build_parser():
     forward_alias.add_argument("--json", action="store_true", help="Emit compact machine-readable JSON")
     forward_options(forward_alias)
 
+    move = command("motion", "move", "Preview a timed move relative to the robot's heading")
+    move.set_defaults(motion_method="move")
+    move.add_argument("--direction", choices=("forward", "backward", "left", "right"), required=True)
+    move.add_argument("--distance", dest="distance_m", type=float, default=1.0,
+                      help="Estimated distance in meters, 0.1..2 (default: 1)")
+    rotate = command("motion", "rotate", "Preview an estimated timed rotation in place")
+    rotate.set_defaults(motion_method="rotate")
+    rotate.add_argument("--angle", dest="angle_deg", type=float, default=90.0,
+                        help="Estimated angle in degrees, 1..360 (default: 90)")
+    rotate.add_argument("--direction", choices=("clockwise", "counterclockwise"), default="clockwise")
+    for cmd in (move, rotate):
+        cmd.add_argument("--robot", default=None)
+        cmd.add_argument("--execute", action="store_true",
+                         help="Execute with configured write permission; otherwise preview")
+
     map_fields = ("map_id", "map_version", "map_checksum", "initial_x", "initial_y", "initial_z", "initial_yaw")
 
     def runtime_options(cmd, method, fields=()):
@@ -144,7 +159,11 @@ def run(argv=None, *, service=None):
         elif getattr(args, "posture_method", None):
             result = getattr(service, args.posture_method)(args.robot, args.execute)
         elif getattr(args, "motion_method", None):
-            if args.measurement_mode == "odometry":
+            if args.motion_method == "move":
+                result = service.move(args.direction, args.distance_m, args.robot, args.execute)
+            elif args.motion_method == "rotate":
+                result = service.rotate(args.angle_deg, args.direction, args.robot, args.execute)
+            elif args.measurement_mode == "odometry":
                 result = service.move_forward(args.distance_m, args.robot, args.execute)
             else:
                 result = service.move_forward(args.distance_m, args.robot, args.execute, args.measurement_mode)

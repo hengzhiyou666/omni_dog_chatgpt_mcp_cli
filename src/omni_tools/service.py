@@ -147,6 +147,46 @@ class OmniService:
         return sanitize({"ok": True, "backend": self.settings.backend, "robot_id": robot,
                          "observed_at": datetime.now(timezone.utc).isoformat(), "data": data})
 
+    def move(self, direction: str, distance_m: float = 1.0, robot_id: str | None = None,
+             execute: bool = False) -> dict:
+        """Estimate body-relative forward, backward, left or right travel by time."""
+        return self._timed_motion("move", direction, distance_m, robot_id, execute)
+
+    def rotate(self, angle_deg: float = 90.0, direction: str = "clockwise",
+               robot_id: str | None = None, execute: bool = False) -> dict:
+        """Estimate an in-place rotation by time; clockwise is the default."""
+        return self._timed_motion("rotate", direction, angle_deg, robot_id, execute)
+
+    def _timed_motion(self, operation, direction, magnitude, robot_id, execute):
+        robot = identifier(self.settings.robot_id if robot_id is None else robot_id, "robot_id")
+        if type(execute) is not bool:
+            raise OmniError("invalid_argument", "execute must be a boolean")
+        moving = operation == "move"
+        directions = ("forward", "backward", "left", "right") if moving else ("clockwise", "counterclockwise")
+        if type(direction) is not str or direction not in directions:
+            raise OmniError("invalid_argument", "direction must be " + ", ".join(directions))
+        field, minimum, maximum = ("distance_m", 0.1, 2.0) if moving else ("angle_deg", 1.0, 360.0)
+        if (type(magnitude) not in {int, float} or not minimum <= magnitude <= maximum
+                or not math.isfinite(magnitude)):
+            raise OmniError("invalid_argument", f"{field} must be a finite number from {minimum} to {maximum}")
+        parameters = {"direction": direction, field: float(magnitude)}
+        if not execute:
+            data = {"operation": operation, "executed": False, "preview": True,
+                    "parameters": {"robot_id": robot, **parameters, "measurement_mode": "timed"},
+                    "execution_backend": "local" if self.settings.backend == "local" else "ssh",
+                    "current_backend_supports_execution": self.settings.backend in {"ssh", "local"},
+                    "execution_requirements": ["SSH or local ROS backend", "OMNI_ALLOW_WRITES=1",
+                                               "robot in OMNI_ALLOWED_ROBOTS", "execute=true",
+                                               "standing idle robot with exclusive APP authority",
+                                               "fresh native locomotion and downstream velocity feedback"],
+                    "completion_note": "Timed movement estimates distance or angle without SLAM. Actual distance and angle are not measured; stopping confirms downstream zero commands, not independent physical stillness."}
+        else:
+            require_motion_write(self.settings, robot)
+            data = {**getattr(self.backend, operation)(**parameters, robot_id=robot),
+                    "operation": operation, "measurement_mode": "timed", "executed": True, "preview": False}
+        return sanitize({"ok": True, "backend": self.settings.backend, "robot_id": robot,
+                         "observed_at": datetime.now(timezone.utc).isoformat(), "data": data})
+
     @staticmethod
     def _runtime_map(map_id, map_version, map_checksum, initial_x, initial_y, initial_z, initial_yaw):
         map_id = identifier(map_id, "map_id")

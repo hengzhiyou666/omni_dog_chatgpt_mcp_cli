@@ -22,7 +22,7 @@ from mcp.client.streamable_http import streamable_http_client
 READ_TOOLS = {
     "get_robot_status", "list_maps", "list_routes", "get_task", "get_inspection_result",
 }
-WRITE_TOOLS = {"start_inspection", "navigate_to", "cancel_task", "stand_up", "lie_down", "move_forward",
+WRITE_TOOLS = {"start_inspection", "navigate_to", "cancel_task", "stand_up", "lie_down", "move_forward", "move", "rotate",
                "start_localization", "start_route_recording", "finish_route_recording", "set_runtime_idle"}
 TOOLS = READ_TOOLS | WRITE_TOOLS
 PREVIEW_CALLS = [
@@ -32,6 +32,8 @@ PREVIEW_CALLS = [
     ("stand_up", {}),
     ("lie_down", {}),
     ("move_forward", {}),
+    ("move", {"direction": "left", "distance_m": 0.2}),
+    ("rotate", {"angle_deg": 15.0}),
     ("start_localization", {"map_id": "map-demo", "map_version": 1, "map_checksum": "a" * 64}),
     ("start_route_recording", {"route_id": "route-demo", "map_id": "map-demo", "map_version": 1,
                                 "map_checksum": "a" * 64}),
@@ -149,7 +151,7 @@ async def test_sdk_stdio_initialization_discovery_and_status(stdio_parameters, m
 
                 discovered = await session.list_tools()
                 assert {tool.name for tool in discovered.tools} == TOOLS
-                assert len(discovered.tools) == 15
+                assert len(discovered.tools) == 17
                 for tool in discovered.tools:
                     assert tool.inputSchema["type"] == "object"
                     assert tool.annotations.readOnlyHint is (tool.name in READ_TOOLS)
@@ -253,7 +255,7 @@ async def test_sdk_streamable_http_initialization_discovery_and_status(http_mcp_
                     assert initialized.serverInfo.name == "Omni Tools"
                     assert initialized.capabilities.tools is not None
                     discovered = await session.list_tools()
-                    assert len(discovered.tools) == 15
+                    assert len(discovered.tools) == 17
                     assert {tool.name for tool in discovered.tools} == TOOLS
                     for tool, arguments in PREVIEW_CALLS:
                         preview = await session.call_tool(tool, arguments)

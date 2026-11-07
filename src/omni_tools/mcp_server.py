@@ -107,6 +107,20 @@ def create_server(settings: Settings | None = None, *, service=None, port: int =
         return await call("move_forward", distance_m, robot_id, execute, measurement_mode)
 
     @server.tool(annotations=writes)
+    async def move(direction: Literal["forward", "backward", "left", "right"],
+                   distance_m: StrictFloat = 1.0, robot_id: str | None = None,
+                   execute: StrictBool = False) -> CallToolResult:
+        """Preview a body-relative move of 0.1..2 meters (default 1). Timed execution estimates distance without measuring travel; left/right preserve heading. execute=true requires configured write permission."""
+        return await call("move", direction, distance_m, robot_id, execute)
+
+    @server.tool(annotations=writes)
+    async def rotate(angle_deg: StrictFloat = 90.0,
+                     direction: Literal["clockwise", "counterclockwise"] = "clockwise",
+                     robot_id: str | None = None, execute: StrictBool = False) -> CallToolResult:
+        """Preview an in-place rotation of 1..360 degrees, clockwise by default. Timed execution estimates the angle without measuring rotation. execute=true requires configured write permission."""
+        return await call("rotate", angle_deg, direction, robot_id, execute)
+
+    @server.tool(annotations=writes)
     async def start_localization(map_id: str, map_version: StrictInt, map_checksum: str,
                                  initial_x: StrictFloat = 0.0, initial_y: StrictFloat = 0.0,
                                  initial_z: StrictFloat = 0.0, initial_yaw: StrictFloat = 0.0,

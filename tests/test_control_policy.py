@@ -224,11 +224,11 @@ async def test_mcp_write_tools_are_distinct_from_five_read_only_tools():
     server = create_server(service=service)
     tools = {tool.name: tool for tool in await server.list_tools()}
     runtime_tools = {"start_localization", "start_route_recording", "finish_route_recording", "set_runtime_idle"}
-    assert set(tools) == READ_TOOLS | WRITE_TOOLS | {"stand_up", "lie_down", "move_forward"} | runtime_tools
+    assert set(tools) == READ_TOOLS | WRITE_TOOLS | {"stand_up", "lie_down", "move_forward", "move", "rotate"} | runtime_tools
     for name in READ_TOOLS:
         assert tools[name].annotations.readOnlyHint is True
         assert tools[name].annotations.destructiveHint is False
-    for name in WRITE_TOOLS | {"stand_up", "lie_down", "move_forward"} | runtime_tools:
+    for name in WRITE_TOOLS | {"stand_up", "lie_down", "move_forward", "move", "rotate"} | runtime_tools:
         assert tools[name].annotations.readOnlyHint is False
         execute = tools[name].inputSchema["properties"]["execute"]
         assert execute["type"] == "boolean"

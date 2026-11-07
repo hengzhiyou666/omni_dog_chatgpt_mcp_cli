@@ -92,7 +92,8 @@ def test_cancelled_task_is_refused_before_bootstrap_environment_or_ros(module, b
 
 
 @pytest.mark.parametrize("cancellation", ["marker", "signal"])
-def test_motion_cancel_still_stops_and_releases_with_repeated_signal_ignored(cancel_file, monkeypatch, cancellation):
+@pytest.mark.parametrize("operation", ["move_forward", "move", "rotate"])
+def test_motion_cancel_still_stops_and_releases_with_repeated_signal_ignored(cancel_file, monkeypatch, cancellation, operation):
     calls = []
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)}
     class Session:
@@ -110,6 +111,8 @@ def test_motion_cancel_still_stops_and_releases_with_repeated_signal_ignored(can
             cancel_file.touch()
             if cancellation == "signal": signal.raise_signal(signal.SIGTERM)
             probe.check_cancelled()
+        def drive_timed_command(self, duration, client, *command):
+            self.drive(None, client, None)
         def stop(self, client):
             calls.append("stop")
             probe.check_cancelled()  # Marker must not interrupt cleanup.
@@ -124,7 +127,11 @@ def test_motion_cancel_still_stops_and_releases_with_repeated_signal_ignored(can
         def diagnostics(self): return {}
         def close(self): calls.append("close")
     monkeypatch.setattr(motion, "MotionSession", Session)
-    motion.motion_worker({"operation": "move_forward", "robot_id": "dog4", "timeout": 12, "distance_m": 1}, "RESULT:")
+    request = {"operation": operation, "robot_id": "dog4", "timeout": 12, "distance_m": 1}
+    if operation == "move": request["direction"] = "left"
+    if operation == "rotate": request["angle_deg"] = 15
+    motion.motion_worker(request, "RESULT:")
+    assert receipt(cancel_file)["operation"] == operation
     result = receipt(cancel_file)["result"]
     assert result["error"]["code"] == "cancelled"
     assert result["error"]["details"]["command_sent"] is True

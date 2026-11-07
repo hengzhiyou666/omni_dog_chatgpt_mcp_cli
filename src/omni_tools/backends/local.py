@@ -11,7 +11,7 @@ from ..errors import OmniError
 from ..remote_probe import ProbeError, check_cancelled, write_receipt
 
 
-_WRITES = _RUNTIME_OPERATIONS | {"set_posture", "move_forward"}
+_WRITES = _RUNTIME_OPERATIONS | {"set_posture", "move_forward", "move", "rotate"}
 
 
 class LocalBackend(SSHBackend):

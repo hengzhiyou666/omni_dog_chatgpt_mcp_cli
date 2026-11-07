@@ -66,7 +66,8 @@ class SSHBackend:
 
     def _run(self, operation: str, robot_id: str, task_id: str | None = None,
              *, posture: str | None = None, distance_m: float | None = None,
-             measurement_mode: str = "odometry", runtime_fields: dict | None = None) -> dict:
+             measurement_mode: str = "odometry", runtime_fields: dict | None = None,
+             direction: str | None = None, angle_deg: float | None = None) -> dict:
         if robot_id != self.settings.robot_id:
             raise OmniError("robot_not_configured", f"Robot does not match this {self.transport_name} configuration")
         if task_id is not None and (
@@ -90,17 +91,31 @@ class SSHBackend:
             body["probe_source"] = source
             body["source"] = source_root.joinpath("remote_posture.py").read_text()
             bootstrap = _POSTURE_BOOTSTRAP
-        elif operation == "move_forward":
+        elif operation in {"move_forward", "move", "rotate"}:
             from ..policy import require_motion_write
             require_motion_write(self.settings, robot_id)
-            if type(measurement_mode) is not str or measurement_mode not in {"odometry", "timed"}:
-                raise OmniError("invalid_argument", "measurement_mode must be odometry or timed")
-            if (type(distance_m) not in {int, float} or not 0.1 <= distance_m <= 2.0
-                    or not math.isfinite(distance_m)):
-                raise OmniError("invalid_argument", "Forward distance must be a finite number from 0.1 to 2 meters")
-            request["distance_m"] = float(distance_m)
-            if measurement_mode != "odometry":
-                request["measurement_mode"] = measurement_mode
+            if operation == "move_forward":
+                if type(measurement_mode) is not str or measurement_mode not in {"odometry", "timed"}:
+                    raise OmniError("invalid_argument", "measurement_mode must be odometry or timed")
+                if (type(distance_m) not in {int, float} or not 0.1 <= distance_m <= 2.0
+                        or not math.isfinite(distance_m)):
+                    raise OmniError("invalid_argument", "Forward distance must be a finite number from 0.1 to 2 meters")
+                request["distance_m"] = float(distance_m)
+                if measurement_mode != "odometry":
+                    request["measurement_mode"] = measurement_mode
+            else:
+                moving = operation == "move"
+                directions = ("forward", "backward", "left", "right") if moving else ("clockwise", "counterclockwise")
+                if type(direction) is not str or direction not in directions:
+                    raise OmniError("invalid_argument", "direction must be " + ", ".join(directions))
+                field, value, minimum, maximum = (("distance_m", distance_m, 0.1, 2.0) if moving
+                                                  else ("angle_deg", angle_deg, 1.0, 360.0))
+                if (type(value) not in {int, float} or not minimum <= value <= maximum
+                        or not math.isfinite(value)):
+                    raise OmniError("invalid_argument", f"{field} must be a finite number from {minimum} to {maximum}")
+                if type(measurement_mode) is not str or measurement_mode != "timed":
+                    raise OmniError("invalid_argument", "measurement_mode must be timed")
+                request.update(direction=direction, measurement_mode="timed", **{field: float(value)})
             body["probe_source"] = source
             body["posture_source"] = source_root.joinpath("remote_posture.py").read_text()
             body["source"] = source_root.joinpath("remote_motion.py").read_text()
@@ -129,8 +144,11 @@ class SSHBackend:
                              command_sent="unknown", retry_safe=False,
                              physical_posture_confirmed=False)
                 message = "Posture transport outcome is unknown; do not automatically repeat the command"
-            elif operation == "move_forward":
-                facts.update(operation=operation, distance_m=distance_m,
+            elif operation in {"move_forward", "move", "rotate"}:
+                target = {"angle_deg": angle_deg} if operation == "rotate" else {"distance_m": distance_m}
+                if operation != "move_forward":
+                    target["direction"] = direction
+                facts.update(operation=operation, **target,
                              command_sent="unknown", retry_safe=False,
                              completion="unknown", stop_confirmed=False)
                 message = "Motion transport outcome is unknown; do not automatically repeat the command"
@@ -192,6 +210,12 @@ class SSHBackend:
 
     def move_forward(self, distance_m: float, robot_id: str, measurement_mode: str = "odometry") -> dict:
         return self._run("move_forward", robot_id, distance_m=distance_m, measurement_mode=measurement_mode)
+
+    def move(self, direction: str, distance_m: float, robot_id: str) -> dict:
+        return self._run("move", robot_id, direction=direction, distance_m=distance_m, measurement_mode="timed")
+
+    def rotate(self, angle_deg: float, direction: str, robot_id: str) -> dict:
+        return self._run("rotate", robot_id, direction=direction, angle_deg=angle_deg, measurement_mode="timed")
 
     def start_localization(self, map_id, map_version, map_checksum,
                            initial_x, initial_y, initial_z, initial_yaw, robot_id):

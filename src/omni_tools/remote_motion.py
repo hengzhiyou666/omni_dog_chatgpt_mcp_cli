@@ -1,4 +1,4 @@
-"""One bounded forward movement through Bridge's APP authority.
+"""One bounded body-frame movement through Bridge's APP authority.
 
 SLAM's tracking-point displacement measures travel; its absolute yaw is never
 treated as body heading. Body-forward velocity always uses typed TeleopCommand.
@@ -35,14 +35,27 @@ DISTANCE_TOLERANCE = 0.15
 STOP_ALLOWANCE_M = 0.12  # Observed ~0.10 m tail travel plus odometry sampling.
 TIMED_SPEED_MPS = 0.35  # Same input already verified to produce forward travel.
 TIMED_ESTIMATED_SPEED_MPS = 0.20  # Ground-speed estimate from the first timed run.
+TIMED_SIDE_SPEED_MPS = 0.25
+TIMED_SIDE_ESTIMATED_SPEED_MPS = 0.15  # Initial backward estimate; not calibrated.
+TIMED_LATERAL_SPEED_MPS = 0.5  # 0.25 did not move dog4; 0.5 was observed to strafe.
+TIMED_LATERAL_ESTIMATED_SPEED_MPS = 0.25  # Initial ground-speed estimate; not calibrated.
+TIMED_YAW_RATE_RADPS = 0.35
+TIMED_ESTIMATED_YAW_RATE_RADPS = 0.25  # Initial rotation estimate; not calibrated.
 
 
 def validate_motion_request(request):
-    if not isinstance(request, dict) or request.get("operation") != "move_forward":
-        raise ProbeError("unsupported_operation", "Only bounded forward movement is allowed")
-    if request.get("measurement_mode", "odometry") not in ("odometry", "timed"):
+    if not isinstance(request, dict) or request.get("operation") not in ("move_forward", "move", "rotate"):
+        raise ProbeError("unsupported_operation", "Only bounded movement and rotation are allowed")
+    operation = request["operation"]
+    mode = request.get("measurement_mode", "odometry" if operation == "move_forward" else "timed")
+    if mode not in (("odometry", "timed") if operation == "move_forward" else ("timed",)):
         raise ProbeError("invalid_argument", "measurement_mode must be odometry or timed")
-    for key, lower, upper in (("distance_m", 0.1, 2.0), ("timeout", 1, 120)):
+    if operation == "move" and request.get("direction") not in ("forward", "backward", "left", "right"):
+        raise ProbeError("invalid_argument", "Invalid movement direction")
+    if operation == "rotate" and request.get("direction", "clockwise") not in ("clockwise", "counterclockwise"):
+        raise ProbeError("invalid_argument", "Invalid rotation direction")
+    target = ("angle_deg", 1, 360) if operation == "rotate" else ("distance_m", 0.1, 2.0)
+    for key, lower, upper in (target, ("timeout", 1, 120)):
         value = request.get(key)
         if (isinstance(value, bool) or not isinstance(value, (int, float))
                 or not lower <= value <= upper or not math.isfinite(value)):
@@ -50,6 +63,26 @@ def validate_motion_request(request):
     robot = request.get("robot_id")
     if not isinstance(robot, str) or not robot or len(robot) > 256 or any(ord(c) < 32 for c in robot):
         raise ProbeError("invalid_argument", "Invalid robot_id")
+
+
+def timed_motion_command(request):
+    """Return body X/Y/yaw input and explicit, unmeasured timing metadata."""
+    if request["operation"] == "rotate":
+        direction = request.get("direction", "clockwise")
+        yaw = TIMED_YAW_RATE_RADPS * (-1 if direction == "clockwise" else 1)
+        return (0.0, 0.0, yaw), {
+            "command_yaw_rate_radps": TIMED_YAW_RATE_RADPS,
+            "estimated_yaw_rate_radps": TIMED_ESTIMATED_YAW_RATE_RADPS,
+            "target_duration_sec": math.radians(request["angle_deg"]) / TIMED_ESTIMATED_YAW_RATE_RADPS}
+    direction = request.get("direction", "forward")
+    speed = TIMED_SPEED_MPS if direction == "forward" else TIMED_SIDE_SPEED_MPS
+    estimate = TIMED_ESTIMATED_SPEED_MPS if direction == "forward" else TIMED_SIDE_ESTIMATED_SPEED_MPS
+    if direction in ("left", "right"):
+        speed, estimate = TIMED_LATERAL_SPEED_MPS, TIMED_LATERAL_ESTIMATED_SPEED_MPS
+    x, y = {"forward": (speed, 0.0), "backward": (-speed, 0.0),
+            "left": (0.0, speed), "right": (0.0, -speed)}[direction]
+    return (x, y, 0.0), {"command_speed_mps": speed, "estimated_speed_mps": estimate,
+                           "target_duration_sec": request["distance_m"] / estimate}
 
 
 def motion_bootstrap(payload):
@@ -71,15 +104,27 @@ def motion_bootstrap(payload):
     except Exception as error:
         failure = _error(error)
         failure["details"].update(command_sent=False, retry_safe=False)
-        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": failure}, operation="move_forward")
+        request = payload.get("request")
+        operation = request.get("operation", "move_forward") if isinstance(request, dict) else "move_forward"
+        _emit(payload.get("marker", "OMNI_TOOLS_RESULT:"), {"ok": False, "error": failure}, operation=operation)
 
 
 def execute_forward(request, session):
+    """Compatibility entry point for the original forward-only interface."""
+    return execute_motion(request, session)
+
+
+def execute_motion(request, session):
     """One attempt with unconditional bounded stop/release after locomotion starts."""
     validate_motion_request(request)
-    mode = request.get("measurement_mode", "odometry")
+    operation = request["operation"]
+    rotating = operation == "rotate"
+    mode = request.get("measurement_mode", "odometry" if operation == "move_forward" else "timed")
     session.measurement_mode = mode
     timed = mode == "timed"
+    target_key = "angle_deg" if rotating else "distance_m"
+    target = request[target_key]
+    command, timing = timed_motion_command(request) if timed else (None, {})
     client_id = "app-omni-" + uuid.uuid4().hex[:24]
     authority_requested = control_acquired = command_sent = False
     origin = result = failure = None
@@ -93,7 +138,7 @@ def execute_forward(request, session):
         response = session.authority(0, client_id)
         if (response.get("accepted") is not True or response.get("active_owner_type") != 1
                 or response.get("active_client_id") != client_id):
-            raise ProbeError("control_denied", "Forward movement requires exclusive APP control")
+            raise ProbeError("control_denied", "Movement requires exclusive APP control")
         session.wait_owned(client_id)
         # The service accepted the exact APP client and live ownership was
         # observed. Preserve this historical fact even after releasing it.
@@ -102,27 +147,29 @@ def execute_forward(request, session):
         session.require_owned(client_id)
         command_sent = True  # Delivery may be ambiguous if the publisher raises.
         ack = session.start_locomotion(client_id)
-        if timed:
+        if operation != "move_forward":
+            session.drive_timed_command(timing["target_duration_sec"], client_id, *command)
+        elif timed:
             session.drive_timed(request["distance_m"], client_id)
         else:
             origin = session.stationary_origin(client_id)
             session.drive(request["distance_m"], client_id, origin)
-        result = {"robot_id": request["robot_id"], "action": "move_forward",
-                  "target_distance_m": request["distance_m"], "executed": True,
+        result = {"robot_id": request["robot_id"], "action": operation,
+                  "target_" + target_key: target, "executed": True,
                   "command_sent": True, "measurement_mode": mode,
                   "completion": "estimated_time" if timed else "measured_displacement",
                   "bridge_ack": ack,
-                  "measurement": ("Elapsed time at a fixed forward command; distance is not measured"
+                  "measurement": ("Elapsed time at a fixed body-frame command; distance and angle are not measured"
                                   if timed else "SLAM tracking-point horizontal net displacement"),
                   "observed_at": utc_now(), "warnings": []}
         if timed:
-            result.update(command_speed_mps=TIMED_SPEED_MPS,
-                          estimated_speed_mps=TIMED_ESTIMATED_SPEED_MPS,
-                          target_duration_sec=request["distance_m"] / TIMED_ESTIMATED_SPEED_MPS)
-            result["warnings"].append("Travel distance and physical stopping are not independently measured; stop feedback confirms downstream zero commands and healthy native locomotion only.")
+            result.update(timing)
+            result["warnings"].append("Travel distance, rotation angle and physical stopping are not independently measured; stop feedback confirms downstream zero commands and healthy native locomotion only.")
+            if rotating or (operation == "move" and request["direction"] != "forward"):
+                result["warnings"].append("Backward, lateral and rotation speed estimates have not been calibrated on this robot.")
     except Exception as error:
         failure = error if isinstance(error, ProbeError) else ProbeError(
-            "motion_failed", "Forward movement failed; actual outcome is not confirmed",
+            "motion_failed", "Movement failed; actual outcome is not confirmed",
             {"exception_type": type(error).__name__})
     finally:
         with begin_cleanup():
@@ -152,11 +199,15 @@ def execute_forward(request, session):
                        "authority_service": "/omni/control/authority",
                        "authority_client_id": client_id,
                        "authority_owner_type": 1 if control_acquired else None,
-                       "control_released": released, "actual_distance_m": measured,
-                       "target_distance_m": request["distance_m"], "measurement_mode": mode,
+                       "control_released": released, "actual_" + target_key: measured,
+                       "target_" + target_key: target, "measurement_mode": mode,
                        "odometry_topic": None if timed else ODOMETRY_TOPIC}
             if timed:
                 details["stop_feedback_scope"] = "downstream_command"
+                details.update(timing)
+            if operation != "move_forward":
+                details.update(action=operation, operation=operation,
+                               direction=request.get("direction", "clockwise"))
             try:
                 details["motion_diagnostics"] = session.diagnostics()
             except Exception:
@@ -192,12 +243,13 @@ def motion_worker(request, marker):
         signal.signal(signal.SIGALRM, timed_out)
         signal.setitimer(signal.ITIMER_REAL, request["timeout"] + 3.5)
         session = MotionSession(request["timeout"])
-        _emit(marker, {"ok": True, "data": execute_forward(request, session)}, operation="move_forward")
+        _emit(marker, {"ok": True, "data": execute_motion(request, session)}, operation=request["operation"])
     except Exception as error:
         failure = _error(error)
         if session is None:
             failure["details"].setdefault("command_sent", False)
-        _emit(marker, {"ok": False, "error": failure}, operation="move_forward")
+        operation = request.get("operation", "move_forward") if isinstance(request, dict) else "move_forward"
+        _emit(marker, {"ok": False, "error": failure}, operation=operation)
     finally:
         try:
             if session is not None:
@@ -481,13 +533,15 @@ class MotionSession(PostureSession):
                 raise ProbeError("odometry_unstable", "Robot tracking point did not settle before movement")
             self.spin()
 
-    def publish_velocity(self, client_id, speed):
+    def publish_velocity(self, client_id, speed, lateral=0.0, yaw_rate=0.0):
         self.sequence += 1
         message = self.teleop_type()
         message.header.stamp = self.node.get_clock().now().to_msg()
         message.header.frame_id = "base_link"
         message.client_id, message.sequence = client_id, self.sequence
         message.twist.linear.x = float(speed)
+        message.twist.linear.y = float(lateral)
+        message.twist.angular.z = float(yaw_rate)
         self.teleop.publish(message)
 
     def drive(self, distance, client_id, origin):
@@ -522,9 +576,19 @@ class MotionSession(PostureSession):
         return round(horizontal_distance(origin, current), 4)
 
     def drive_timed(self, distance, client_id):
-        end = time.monotonic() + distance / TIMED_ESTIMATED_SPEED_MPS
+        self.drive_timed_command(distance / TIMED_ESTIMATED_SPEED_MPS, client_id, TIMED_SPEED_MPS)
+
+    def drive_timed_command(self, duration, client_id, speed, lateral=0.0, yaw_rate=0.0):
+        started = time.monotonic()
+        end = started + duration
+        if end > self.deadline + 1e-9:
+            raise ProbeError("timeout", "Requested movement does not fit the remaining time budget",
+                             {"required_duration_sec": duration,
+                              "remaining_duration_sec": max(0.0, self.deadline - started)})
         previous_deadline = self.deadline
-        self.deadline = min(self.deadline, end)
+        self.deadline = end
+        expected = (speed, lateral, 0.0, 0.0, 0.0, yaw_rate)
+        matched = False
         try:
             while time.monotonic() < end:
                 check_cancelled()
@@ -532,8 +596,21 @@ class MotionSession(PostureSession):
                 self.require_locomotion_ready()
                 if time.monotonic() >= end:
                     break
-                self.publish_velocity(client_id, TIMED_SPEED_MPS)
+                if lateral or yaw_rate:
+                    self.publish_velocity(client_id, speed, lateral, yaw_rate)
+                else:
+                    self.publish_velocity(client_id, speed)
                 self.cycle(until=end)
+                matched = (self.velocity is not None and self.velocity_received > started
+                           and time.monotonic() - self.velocity_received <= 0.4
+                           and all(math.isfinite(actual) and (
+                               abs(actual) > 0.005 and actual * wanted > 0 if wanted
+                               else abs(actual) <= 0.005)
+                               for actual, wanted in zip(self.velocity, expected)))
+                if not matched and time.monotonic() - started >= 0.5:
+                    raise ProbeError("motion_unconfirmed", "Downstream command does not confirm the requested axis and direction")
+            if not matched:
+                raise ProbeError("motion_unconfirmed", "Downstream command did not confirm the requested axis and direction")
         finally:
             self.deadline = previous_deadline
 

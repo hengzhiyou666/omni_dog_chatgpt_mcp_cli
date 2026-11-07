@@ -61,7 +61,7 @@ async def test_mcp_tools_have_read_only_annotations_and_structured_errors(servic
     server = create_server(service=service)
     tools = await server.list_tools()
     reads = {"get_robot_status", "list_maps", "list_routes", "get_task", "get_inspection_result"}
-    writes = {"start_inspection", "navigate_to", "cancel_task", "stand_up", "lie_down", "move_forward",
+    writes = {"start_inspection", "navigate_to", "cancel_task", "stand_up", "lie_down", "move_forward", "move", "rotate",
               "start_localization", "start_route_recording", "finish_route_recording", "set_runtime_idle"}
     assert {t.name for t in tools} == reads | writes
     assert all(t.annotations.readOnlyHint and not t.annotations.destructiveHint for t in tools if t.name in reads)
